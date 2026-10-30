@@ -1,0 +1,1296 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Window
+    x:Class="LlamaApp.Views.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:LlamaApp.Views"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+        This window is never shown as a normal top-level window. It is styled
+        as a Windows 11 flyout (borderless, Mica backdrop, rounded corners) and
+        only ever appears anchored to the system-tray icon, dismissing itself
+        when it loses focus — mirroring the macOS menu-bar app on Windows.
+
+        The content is a vertical Grid with three sections. Sections 1, 3 take
+        their natural height; section 2 stretches to fill the remaining space
+        (Row *):
+          1. Brand header (logo left, action icons right) — Auto, compact
+          2. Models — one continuous list: installed models on top, a
+             subtle "Browse more" separator, then catalog model families
+             (name · sizes · description → details → download) — *
+             (stretches), Fluent card
+          3. Hub search — a fixed, always-visible Hugging Face search box
+             with the results below it (rows like the models list, plus a
+             download button; the results ListView owns its scrollbar)
+             — Auto, grows to its content (results capped)
+          4. Version footer (app version - llama.cpp version) — Auto, compact
+        The list section is a Fluent card (4px rounded corners, 1px stroke,
+        card fill, z-depth 8 elevation via ThemeShadow), so no divider line
+        is needed around it.
+        The old footer's Settings/Quit buttons are gone; those actions live as
+        icons in the header now. The version caption is re-added as the last
+        section.
+    -->
+    <Window.SystemBackdrop>
+        <MicaBackdrop Kind="Base" />
+    </Window.SystemBackdrop>
+
+    <!-- Esc dismisses the flyout (the same convention as the chat overlay,
+         whose pattern this copies). KeyboardAccelerators live on Control, not
+         Window, so the root Grid is wrapped in a UserControl; window-level
+         accelerators are processed regardless of which element has focus. -->
+    <UserControl>
+        <UserControl.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Escape" Invoked="EscapeAccelerator_Invoked" />
+        </UserControl.KeyboardAccelerators>
+
+    <Grid>
+        <Grid.Resources>
+            <!-- Installed model row: icon (running badge on the tile), name,
+                 quant chip + params·size in the subtitle line, play glyph or
+                 progress ring. The row
+                 lights up on hover and shows the full (possibly ellipsized)
+                 model name as a tooltip. The row wraps the shared ModelItem
+                 in an InstalledModelListItemViewModel so one ListView can
+                 mix installed rows, the "Browse more" separator and family
+                 rows (the template selector splits them). -->
+            <DataTemplate x:Key="InstalledModelRowTemplate"
+                          x:DataType="local:InstalledModelListItemViewModel">
+                <Grid>
+                    <!-- Subtle divider to the next row, indented past the
+                         icon column; the shell toggles ShowDivider whenever
+                         the list structure changes (never adjacent to the
+                         separator). -->
+                    <Rectangle Height="1"
+                               Margin="50,0,8,0"
+                               VerticalAlignment="Top"
+                               Fill="{ThemeResource DividerStrokeColorDefaultBrush}"
+                               Visibility="{x:Bind ShowDivider, Mode=OneWay}" />
+                <Grid Padding="8,6"
+                      ColumnSpacing="10"
+                      CornerRadius="{ThemeResource ControlCornerRadius}"
+                      Background="Transparent"
+                      PointerEntered="Row_PointerEntered"
+                      PointerExited="Row_PointerExited"
+                      ToolTipService.ToolTip="{x:Bind Model.RowToolTip}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Navigation hit target: the row body (logo + name) opens
+                         the model details view; the action icons in column 2
+                         keep their own behavior. A real Button (not a Tapped
+                         handler) keeps keyboard focus + invoke, and it sits
+                         NEXT TO the action cell — no nested buttons. Its
+                         chrome is made transparent via resource overrides so
+                         the row's own hover fill stays the only hover paint. -->
+                    <Button Grid.Column="0" Grid.ColumnSpan="2"
+                            Click="LocalModelDetails_Click"
+                            Tag="{x:Bind Model}"
+                            Padding="0"
+                            MinWidth="0" MinHeight="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            AutomationProperties.Name="{x:Bind Model.RowAccessibleName, Mode=OneWay}"
+                            AutomationProperties.HelpText="Open model details">
+                        <Button.Resources>
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                        </Button.Resources>
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                    <!-- Logo tile with a "running" badge pinned to its
+                         bottom-right corner — the loaded-state signal. Every
+                         other state has its own affordance (load ring,
+                         warning dot + retry, progress ring), and screen
+                         readers get the state from the row's accessible
+                         name, so the badge isn't color-only. The logo image
+                         is inset by Margin=4 inside the 32px tile, so its
+                         corner sits at (28,28); a 12px dot with a -2 right/
+                         bottom margin lands its center exactly there. -->
+                    <Grid Grid.Column="0" Width="32" Height="32">
+                        <Border CornerRadius="{ThemeResource ControlCornerRadius}"
+                                Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                            <Image Source="{x:Bind Model.Logo, Mode=OneWay}"
+                                   Stretch="Uniform"
+                                   Margin="4" />
+                        </Border>
+                        <Ellipse Visibility="{x:Bind Model.OpenGlyphVisible, Mode=OneWay}"
+                                 Width="12" Height="12"
+                                 Fill="#3FB950"
+                                 Stroke="{ThemeResource ControlFillColorSecondaryBrush}"
+                                 StrokeThickness="1.5"
+                                 HorizontalAlignment="Right"
+                                 VerticalAlignment="Bottom"
+                                 Margin="0,0,-2,-2"
+                                 ToolTipService.ToolTip="Running" />
+                    </Grid>
+
+                    <StackPanel Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Spacing="1">
+                        <!-- Clean name alone on the first line. The quant
+                             chip rides at the START of the subtitle line
+                             below — every row's metadata begins at the same
+                             x, so the chip reads as aligned without pinning
+                             the name column to a fixed width. -->
+                        <TextBlock Text="{x:Bind Model.RowDisplayName}"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="190"
+                                   HorizontalAlignment="Left" />
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="6"
+                                    VerticalAlignment="Center">
+                            <!-- Params chip: first element of the metadata
+                                 line, so it starts at the same x on every
+                                 row (the drift it had behind variable-length
+                                 names is what made it feel random). Same tag
+                                 style as the details view's parameter badge. -->
+                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="4,0"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind Model.HasParameters}">
+                                <TextBlock Text="{x:Bind Model.Parameters}"
+                                           FontSize="10"
+                                           VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Border>
+                            <!-- Quant chip, right after the params chip. -->
+                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="4,0"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind Model.HasQuant}">
+                                <TextBlock Text="{x:Bind Model.Quant}"
+                                           FontSize="10"
+                                           VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Border>
+                            <!-- Vision marker: shown when the server reports
+                                 image input (architecture.input_modalities).
+                                 A small “view” (eye) glyph, dimmed so it reads
+                                 as a capability hint rather than part of the name.
+                                 Tiled in the same gray rounded background as
+                                 the logo so it reads as a small chip.
+                                 Pinned right after the quant chip — ahead of the
+                                 subtitle — because the subtitle swaps to the live
+                                 download line ("…· 45 MB/s · ~4 min left") whose
+                                 width changes every tick; trailing the subtitle
+                                 made the chip drift left/right constantly.
+                                 The glyph MUST come from the intersection of
+                                 Segoe Fluent Icons and Segoe MDL2 Assets:
+                                 FontIcon falls back to MDL2 where the Fluent
+                                 font is missing/older (Windows 10, older
+                                 Windows 11), and there the prettier “glasses”
+                                 U+EB25 doesn't exist — it renders as the
+                                 crossed-square missing-glyph box. U+E890
+                                 (View) exists in both. -->
+                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="4,0"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind Model.Vision, Mode=OneWay}">
+                                <FontIcon Glyph="&#xE890;"
+                                          FontSize="11"
+                                          Opacity="0.55"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center" />
+                            </Border>
+                            <!-- Subtitle: the file size at rest (the params
+                                 ride in the chip ahead of it); while a
+                                 download runs, the live detail line instead
+                                 ("3.2 GB of 12.1 GB · 45 MB/s · ~4 min left"). -->
+                            <TextBlock FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       Text="{x:Bind Model.SubtitleText, Mode=OneWay}" />
+                        </StackPanel>
+                    </StackPanel>
+                        </Grid>
+                    </Button>
+
+                    <!-- Action cell: exactly one of play / download ring /
+                         load ring / open glyph / failure affordance, driven by
+                         the ModelItem load/download state. Mutually exclusive
+                         via Visibility. When loaded, the Open and Power/unload
+                         glyphs appear side by side. -->
+                    <StackPanel Grid.Column="2"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center">
+                        <!-- Download failed: warning dot + retry button. Shown
+                             instead of the play glyph (PlayGlyphVisible excludes
+                             failed rows) so a broken download can't be "loaded".
+                             The panel is right-aligned, so the dot and the retry
+                             button occupy the same two slots as the delete and
+                             play buttons on an available row — both use the same
+                             16px glyph metrics as those buttons (and the retry
+                             button the same 0.5 opacity) so a row flipping
+                             between failed and available doesn't shift or shrink
+                             the action cell. -->
+                        <FontIcon Visibility="{x:Bind Model.DownloadFailed, Mode=OneWay}"
+                                  Glyph="&#xE7BA;"
+                                  FontSize="16"
+                                  Foreground="#F85149"
+                                  VerticalAlignment="Center"
+                                  Margin="0,0,2,0"
+                                  ToolTipService.ToolTip="{x:Bind Model.DownloadFailureTooltip, Mode=OneWay}" />
+                        <Button Visibility="{x:Bind Model.DownloadFailed, Mode=OneWay}"
+                                Click="LocalModelRetryDownload_Click"
+                                Tag="{x:Bind Model}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                AutomationProperties.Name="Retry download"
+                                ToolTipService.ToolTip="Retry download">
+                            <FontIcon Glyph="&#xE72C;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
+                        <!-- Load failed: warning dot + retry button, mirroring
+                             the download-failed pair above (same two slots,
+                             same metrics, so a row flipping between failed and
+                             available doesn't shift the action cell). Without
+                             this a rejected load (OOM, corrupt GGUF, server
+                             refusal) was silent: the ring just vanished. -->
+                        <FontIcon Visibility="{x:Bind Model.LoadFailed, Mode=OneWay}"
+                                  Glyph="&#xE7BA;"
+                                  FontSize="16"
+                                  Foreground="#F85149"
+                                  VerticalAlignment="Center"
+                                  Margin="0,0,2,0"
+                                  ToolTipService.ToolTip="{x:Bind Model.LoadFailureTooltip, Mode=OneWay}" />
+                        <Button Visibility="{x:Bind Model.LoadFailed, Mode=OneWay}"
+                                Click="LocalModelRetryLoad_Click"
+                                Tag="{x:Bind Model}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                AutomationProperties.Name="Retry load"
+                                ToolTipService.ToolTip="Retry load">
+                            <FontIcon Glyph="&#xE72C;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
+                        <!-- Reveal in Explorer: open the folder that holds
+                             the model's .gguf with the file selected (falls
+                             back to the folder when the file is gone). Sits
+                             left of the delete button; shown whenever the row
+                             knows its file on disk (enrolled folders, imports,
+                             cache) — constant per row, so the action cell
+                             never shifts as the row flips load states. -->
+                        <Button Visibility="{x:Bind Model.HasFilePath, Mode=OneWay}"
+                                Click="LocalModelRevealInExplorer_Click"
+                                Tag="{x:Bind Model}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                AutomationProperties.Name="Show model file in Explorer"
+                                ToolTipService.ToolTip="Show model file in Explorer">
+                            <FontIcon Glyph="&#xE8B7;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
+                        <!-- Delete button: remove the model from the server's
+                             cache (DELETE /models/{name}). Sits to the left of
+                             the play glyph; shown only while the model is
+                             unloaded (PlayGlyphVisible) so a loaded/loading
+                             row isn't accidentally deleted mid-use. Opens a
+                             confirmation flyout — deleting re-downloads GBs. -->
+                        <Button Visibility="{x:Bind Model.PlayGlyphVisible, Mode=OneWay}"
+                                Click="LocalModelDelete_Click"
+                                Tag="{x:Bind Model}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                AutomationProperties.Name="Delete model"
+                                ToolTipService.ToolTip="Delete model">
+                            <Button.Flyout>
+                                <Flyout Placement="Bottom">
+                                    <StackPanel Spacing="10" MaxWidth="240">
+                                        <TextBlock Text="Delete this model?"
+                                                   FontSize="13"
+                                                   FontWeight="SemiBold" />
+                                        <TextBlock Text="The downloaded files are removed from disk. You can download the model again at any time."
+                                                   FontSize="12"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   TextWrapping="Wrap" />
+                                        <Button Content="Delete"
+                                                Click="LocalModelDeleteConfirm_Click"
+                                                Foreground="#F85149"
+                                                HorizontalAlignment="Right" />
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                            <FontIcon Glyph="&#xE74D;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
+                        <!-- Play button: model is unloaded, click to load it. -->
+                        <Button Visibility="{x:Bind Model.PlayGlyphVisible, Mode=OneWay}"
+                                Click="LocalModelPlay_Click"
+                                Tag="{x:Bind Model}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                AutomationProperties.Name="Load model"
+                                ToolTipService.ToolTip="Load model">
+                            <FontIcon Glyph="&#xE768;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
+                        <!-- Download progress ring (downloading from the Hub)
+                             with a percent caption once the byte count is known
+                             — multi-GB downloads need real progress feedback.
+                             The ring is itself a button: click to pause the
+                             download (the row swaps to the resume glyph below;
+                             clicking that resumes). Disabled for externally-
+                             triggered downloads (WebUI/CLI), which have no
+                             cancellation source — same rule as the cancel
+                             button, so pause is never a no-op. -->
+                        <Button Visibility="{x:Bind Model.ProgressRingVisible, Mode=OneWay}"
+                                IsEnabled="{x:Bind Model.CanPauseDownload, Mode=OneWay}"
+                                Click="LocalModelPauseDownload_Click"
+                                Tag="{x:Bind Model}"
+                                Padding="0"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Pause download"
+                                ToolTipService.ToolTip="Pause download">
+                            <Button.Resources>
+                                <!-- Chromeless like the row body: the ring +
+                                     caption sit on the bare row, no pill behind
+                                     the progress circle. The Disabled override
+                                     matters most: for externally-triggered (or
+                                     repopulate-orphaned) downloads the button is
+                                     disabled, and WinUI's Disabled visual state
+                                     would otherwise paint ButtonBackgroundDisabled
+                                     — a lighter rounded disk right behind the
+                                     ring — over the local transparent Background. -->
+                                <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBorderBrushDisabled" Color="Transparent" />
+                            </Button.Resources>
+                            <StackPanel VerticalAlignment="Center"
+                                        Spacing="2">
+                                <!-- Custom ring: WinUI's ProgressRing paints a
+                                     lighter disk behind its arc (exactly the
+                                     ring's size, ignoring Background) — this
+                                     one draws only the arc, spinning while the
+                                     byte count is unknown (ModelProgressRing). -->
+                                <local:ModelProgressRing
+                                    Fraction="{x:Bind Model.DownloadFraction, Mode=OneWay}"
+                                    IsIndeterminate="{x:Bind Model.IsIndeterminateDownload, Mode=OneWay}"
+                                    HorizontalAlignment="Center" />
+                                <TextBlock Text="{x:Bind Model.DownloadProgressText, Mode=OneWay}"
+                                           Visibility="{x:Bind Model.DownloadPercentTextVisible, Mode=OneWay}"
+                                           FontSize="10"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+
+                        <!-- Paused: resume glyph in the ring's slot, with the
+                             frozen percent below so the paused slot keeps the
+                             ring's shape. The download glyph (not play) keeps
+                             "resume the download" distinct from "load the
+                             model" on an Available row. The cancel button
+                             stays visible so a paused download can still be
+                             abandoned. -->
+                        <Button Visibility="{x:Bind Model.ResumeDownloadVisible, Mode=OneWay}"
+                                Click="LocalModelResumeDownload_Click"
+                                Tag="{x:Bind Model}"
+                                Padding="0"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Resume download"
+                                ToolTipService.ToolTip="Resume download">
+                            <Button.Resources>
+                                <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                            </Button.Resources>
+                            <StackPanel VerticalAlignment="Center"
+                                        Spacing="2">
+                                <FontIcon Glyph="&#xE896;"
+                                          FontSize="16"
+                                          Opacity="0.5"
+                                          HorizontalAlignment="Center" />
+                                <TextBlock Text="{x:Bind Model.DownloadProgressText, Mode=OneWay}"
+                                           Visibility="{x:Bind Model.PausedPercentTextVisible, Mode=OneWay}"
+                                           FontSize="10"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+
+                        <!-- Cancel download: stops the in-flight download (the
+                             server is asked to abort too; a partial download
+                             resumes on the next attempt). Sits at the trailing
+                             edge like the other row actions and shares their
+                             metrics. Hidden for externally-triggered downloads
+                             (WebUI / CLI), which have no cancellation source —
+                             CancelDownloadVisible excludes them so the button
+                             is never a no-op. Also shown while the download is
+                             paused — there it abandons the partial (the server
+                             side is already stopped) and returns the row to
+                             the play glyph. The glyph MUST exist in both
+                             Segoe Fluent Icons and Segoe MDL2 Assets (see the
+                             vision-marker comment above): U+E711 (Cancel) does.
+                             The download -> load transition drops this button,
+                             shrinking the action cell by one slot; the ring
+                             itself keeps its slot, so the row height and the
+                             ring position don't move. -->
+                        <Button Visibility="{x:Bind Model.CancelDownloadVisible, Mode=OneWay}"
+                                Click="LocalModelCancelDownload_Click"
+                                Tag="{x:Bind Model}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Cancel download"
+                                ToolTipService.ToolTip="Cancel download">
+                            <FontIcon Glyph="&#xE711;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
+                        <!-- Load ring: load request sent. Determinate once the
+                             server's status_change SSE events report a progress
+                             fraction (with a percent caption, like the download
+                             ring); spins indeterminately until the first event
+                             — and for externally-triggered loads, which only
+                             the poller observes. -->
+                        <StackPanel Visibility="{x:Bind Model.LoadingRingVisible, Mode=OneWay}"
+                                    VerticalAlignment="Center"
+                                    Spacing="2">
+                            <!-- Custom ring, same rationale as the download
+                                 ring: draws only the arc, never the lighter
+                                 disk WinUI's ProgressRing paints behind it. -->
+                            <local:ModelProgressRing
+                                Fraction="{x:Bind Model.LoadFraction, Mode=OneWay}"
+                                IsIndeterminate="{x:Bind Model.IsIndeterminateLoad, Mode=OneWay}"
+                                HorizontalAlignment="Center" />
+                            <TextBlock Text="{x:Bind Model.LoadProgressText, Mode=OneWay}"
+                                       Visibility="{x:Bind Model.LoadPercentTextVisible, Mode=OneWay}"
+                                       FontSize="10"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       HorizontalAlignment="Center" />
+                        </StackPanel>
+
+                        <!-- Open in new window: model is loaded, click to open
+                             the running server's WebUI in the browser. -->
+                        <Button Visibility="{x:Bind Model.OpenGlyphVisible, Mode=OneWay}"
+                                Click="LocalModelOpen_Click"
+                                Tag="{x:Bind Model}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                AutomationProperties.Name="Open WebUI"
+                                ToolTipService.ToolTip="Open WebUI">
+                            <FontIcon Glyph="&#xE8A7;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
+                        <!-- Stop/unload: model is loaded, click to stop it
+                             and unload it from the server (frees memory).
+                             The square stop glyph — U+E71A exists in both
+                             Segoe Fluent Icons and Segoe MDL2 Assets. -->
+                        <Button Visibility="{x:Bind Model.OpenGlyphVisible, Mode=OneWay}"
+                                Click="LocalModelUnload_Click"
+                                Tag="{x:Bind Model}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                AutomationProperties.Name="Stop model"
+                                ToolTipService.ToolTip="Stop model">
+                            <FontIcon Glyph="&#xE71A;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+                </Grid>
+            </DataTemplate>
+
+            <!-- "Browse more" separator: the quiet transition from "yours"
+                 to "available". No divider adjacent to it (the shell never
+                 sets ShowDivider next to the separator); its own rules +
+                 caption carry the grouping. -->
+            <DataTemplate x:Key="BrowseSeparatorTemplate"
+                          x:DataType="local:BrowseSeparatorListItemViewModel">
+                <Grid Margin="0,6" ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Rectangle Grid.Column="0"
+                               Height="1"
+                               VerticalAlignment="Center"
+                               Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                    <TextBlock Grid.Column="1"
+                               Text="Browse more"
+                               FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               VerticalAlignment="Center" />
+                    <Rectangle Grid.Column="2"
+                               Height="1"
+                               VerticalAlignment="Center"
+                               Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                </Grid>
+            </DataTemplate>
+
+            <!-- Catalog model FAMILY row: name │ parameter sizes, one-line
+                 description, chevron. Deliberately variant-independent — no
+                 quant, file size, license or ranking here; those surface in
+                 the family details view. The whole row is a chromeless
+                 Button (click, Enter or Space opens the details) — a bare
+                 Grid would be unfocusable with no invoke pattern. The
+                 Button's own visual states paint the hover/pressed fill, so
+                 the row needs no custom pointer handlers. -->
+            <DataTemplate x:Key="ModelFamilyRowTemplate"
+                          x:DataType="local:ModelFamilyListItemViewModel">
+                <Grid>
+                    <Rectangle Height="1"
+                               Margin="50,0,8,0"
+                               VerticalAlignment="Top"
+                               Fill="{ThemeResource DividerStrokeColorDefaultBrush}"
+                               Visibility="{x:Bind ShowDivider, Mode=OneWay}" />
+                    <Button Click="ModelFamily_Click"
+                            Tag="{x:Bind Family}"
+                            Padding="8,6"
+                            MinWidth="0" MinHeight="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            CornerRadius="{ThemeResource ControlCornerRadius}"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            AutomationProperties.Name="{x:Bind Family.AccessibleName}"
+                            AutomationProperties.HelpText="Open family details"
+                            Opacity="{x:Bind Family.RowOpacity, Mode=OneWay}"
+                            ToolTipService.ToolTip="{x:Bind Family.RowToolTip, Mode=OneWay}">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Column="0"
+                                    Width="32" Height="32"
+                                    CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                                <Image Source="{x:Bind Family.Logo, Mode=OneWay}"
+                                       Stretch="Uniform"
+                                       Margin="4" />
+                            </Border>
+
+                            <StackPanel Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        Spacing="1">
+                                <!-- Name │ sizes — one line, ellipsized. -->
+                                <Grid ColumnSpacing="6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" MaxWidth="150" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="{x:Bind Family.Name}"
+                                               FontSize="13"
+                                               FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1"
+                                               Text="│"
+                                               FontSize="12"
+                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                               VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2"
+                                               Text="{x:Bind Family.DisplayParameterSizes}"
+                                               FontSize="12"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               TextTrimming="CharacterEllipsis"
+                                               TextWrapping="NoWrap"
+                                               VerticalAlignment="Center" />
+                                </Grid>
+                                <!-- One-line description. -->
+                                <TextBlock Text="{x:Bind Family.Description}"
+                                           FontSize="11"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           TextTrimming="CharacterEllipsis"
+                                           TextWrapping="NoWrap" />
+                            </StackPanel>
+
+                            <FontIcon Grid.Column="2"
+                                      Glyph="&#xE76C;"
+                                      FontSize="12"
+                                      Opacity="0.5"
+                                      VerticalAlignment="Center" />
+                        </Grid>
+                    </Button>
+                </Grid>
+            </DataTemplate>
+
+            <!-- Hub search-result row: name │ author · downloads · likes,
+                 download action. The whole row is a chromeless button-free
+                 Grid like the installed row; the action cell is a small
+                 transparent-chrome button that swaps to a static checkmark
+                 once the download was started — the installed list above
+                 then owns the live progress ring. -->
+            <DataTemplate x:Key="HubModelRowTemplate"
+                          x:DataType="local:HubModelItemViewModel">
+                <Grid Padding="8,6"
+                      ColumnSpacing="10"
+                      CornerRadius="{ThemeResource ControlCornerRadius}"
+                      Background="Transparent"
+                      ToolTipService.ToolTip="{x:Bind RepoId}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Author avatar tile — the same chrome as the model
+                         rows' logo tiles (secondary fill, control corner
+                         radius). Filled by the shell from the disk cache
+                         once the author's Hub avatar lands; the avatar is
+                         fetched at download time and stored locally for
+                         reuse, so authors seen before show their avatar
+                         immediately. -->
+                    <Border Grid.Column="0"
+                            Width="24" Height="24"
+                            CornerRadius="{ThemeResource ControlCornerRadius}"
+                            Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                            VerticalAlignment="Center">
+                        <Image Source="{x:Bind Logo, Mode=OneWay}"
+                               Width="18" Height="18"
+                               Stretch="Uniform"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center" />
+                    </Border>
+
+                    <StackPanel Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Spacing="1">
+                        <TextBlock Text="{x:Bind DisplayName}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{x:Bind MetaText}"
+                                   FontSize="11"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+
+                    <!-- Action cell: download glyph while idle, a static
+                         checkmark once the download was started (the live
+                         progress lives on the installed list's row). The
+                         glyphs MUST exist in both Segoe Fluent Icons and
+                         Segoe MDL2 Assets: U+E896 (Download) and U+E73E
+                         (CheckMark) both do. -->
+                    <Button Grid.Column="2"
+                            Click="HubModelDownload_Click"
+                            Tag="{x:Bind}"
+                            Padding="6"
+                            MinWidth="0" MinHeight="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="Download model"
+                            ToolTipService.ToolTip="Download model">
+                        <Button.Resources>
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                        </Button.Resources>
+                        <Grid>
+                            <FontIcon Glyph="&#xE896;"
+                                      FontSize="16"
+                                      Opacity="0.5"
+                                      Visibility="{x:Bind DownloadGlyphVisible, Mode=OneWay}" />
+                            <FontIcon Glyph="&#xE73E;"
+                                      FontSize="16"
+                                      Opacity="0.5"
+                                      Visibility="{x:Bind AddedGlyphVisible, Mode=OneWay}" />
+                        </Grid>
+                    </Button>
+                </Grid>
+            </DataTemplate>
+
+            <!-- Hub suggestion row (AutoSuggestBox dropdown): name with
+                 the download count to its right. Shares the same view-model
+                 as the results list — choosing a suggestion runs the full
+                 search for its repo id. -->
+            <DataTemplate x:Key="HubSuggestionTemplate"
+                          x:DataType="local:HubModelItemViewModel">
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0"
+                               Text="{x:Bind DisplayName}"
+                               FontSize="12"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1"
+                               Text="{x:Bind MetaText}"
+                               FontSize="11"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                </Grid>
+            </DataTemplate>
+
+            <!-- Load-more row: the single tappable sentinel appended after a
+                 full page of results. Its three states share the row — idle
+                 "Show more", an inline spinner while the next page is in
+                 flight, and a recoverable "Retry" after a failure. Rendered
+                 through HubResultsTemplateSelector so it never gets the model
+                 row's live download button. -->
+            <DataTemplate x:Key="HubLoadMoreRowTemplate"
+                          x:DataType="local:HubModelItemViewModel">
+                <Button Click="HubLoadMore_Click"
+                        Tag="{x:Bind}"
+                        Padding="8,6"
+                        MinWidth="0" MinHeight="0"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        AutomationProperties.Name="Show more results"
+                        ToolTipService.ToolTip="Show more results">
+                    <Button.Resources>
+                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                    </Button.Resources>
+                    <Grid>
+                        <TextBlock Text="Show more"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   Visibility="{x:Bind ShowMoreVisible, Mode=OneWay}" />
+                        <local:ModelProgressRing Width="14" Height="14"
+                                                 IsIndeterminate="True"
+                                                 HorizontalAlignment="Center"
+                                                 Visibility="{x:Bind LoadMoreBusyVisible, Mode=OneWay}" />
+                        <TextBlock Text="Couldn't load more results — Retry"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   Visibility="{x:Bind RetryVisible, Mode=OneWay}" />
+                    </Grid>
+                </Button>
+            </DataTemplate>
+
+            <!-- Selects the load-more row's template vs the model row's; the
+                 results list is the only consumer. -->
+            <local:HubResultsTemplateSelector x:Key="HubResultsTemplateSelector"
+                                              ModelTemplate="{StaticResource HubModelRowTemplate}"
+                                              LoadMoreTemplate="{StaticResource HubLoadMoreRowTemplate}" />
+
+            <!-- The list's template selector (installed row / separator /
+                 family row) and the chromeless ListViewItem style: zero
+                 padding/height so the rows own their own metrics, and no
+                 container-level hover/selection paint (SelectionMode is
+                 None; the rows' own visual states handle feedback). -->
+            <local:ModelListTemplateSelector x:Key="ModelListTemplateSelector"
+                                             InstalledModelTemplate="{StaticResource InstalledModelRowTemplate}"
+                                             BrowseSeparatorTemplate="{StaticResource BrowseSeparatorTemplate}"
+                                             ModelFamilyTemplate="{StaticResource ModelFamilyRowTemplate}" />
+
+            <Style x:Key="ChromelessListViewItemStyle" TargetType="ListViewItem">
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Margin" Value="0" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="VerticalContentAlignment" Value="Stretch" />
+                <Setter Property="IsTabStop" Value="False" />
+                <Setter Property="Background" Value="Transparent" />
+            </Style>
+        </Grid.Resources>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" /> <!-- Section 1: brand header -->
+            <RowDefinition Height="Auto" /> <!-- Divider -->
+            <RowDefinition Height="*" />    <!-- Section 2: models list (card, stretches) -->
+            <RowDefinition Height="Auto" /> <!-- Section 3: Hub search (fixed, always visible) -->
+            <RowDefinition Height="Auto" /> <!-- Divider -->
+            <RowDefinition Height="Auto" /> <!-- Section 4: version footer -->
+        </Grid.RowDefinitions>
+
+        <!-- ============ Section 1: Brand header (compact) ============
+             Logo left-aligned, action icons right-aligned, both
+             at the same 16px horizontal margin as the sections below. The
+             settings gear opens Settings; the globe quits the app — replacing
+             the old footer's Settings/Quit buttons. -->
+        <Grid Grid.Row="0"
+              Margin="16,10,16,8"
+              ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Left: brand logo. Clicking it opens llama.app in the
+                 default browser (see Logo_Click). Transparent chrome to
+                 match the action icon buttons on the right. -->
+            <Button Grid.Column="0"
+                    Click="Logo_Click"
+                    Padding="3"
+                    Margin="-3,0,0,0"
+                    MinWidth="0" MinHeight="0"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    AutomationProperties.Name="Open llama.app"
+                    ToolTipService.ToolTip="Open llama.app">
+                <Image Source="{ThemeResource BrandLogoSource}"
+                       Width="20" Height="20"
+                       Stretch="Uniform" />
+            </Button>
+
+            <!-- Middle: update banner — shown (see CheckForAppUpdateAsync) only
+                 when GitHub reports a release newer than the running version.
+                 Soft-yellow caution chrome; the link opens the release page in
+                 the default browser. Collapsed by default. -->
+            <Border x:Name="UpdateBanner"
+                    Grid.Column="1"
+                    Visibility="Collapsed"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Padding="10,3,6,3"
+                    CornerRadius="6"
+                    Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+                    AutomationProperties.Name="Update available">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="New version available"
+                               MaxWidth="160"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                               TextTrimming="CharacterEllipsis" />
+                    <HyperlinkButton x:Name="UpdateLink"
+                                     Padding="4,0"
+                                     FontSize="12"
+                                     VerticalAlignment="Center"
+                                     AutomationProperties.Name="Open the release page"
+                                     ToolTipService.ToolTip="Open the release page in your browser" />
+                </StackPanel>
+            </Border>
+
+            <!-- Right: action icons (replace the old footer buttons). Transparent
+                 chrome to match the row icon buttons; the default button visual
+                 states still paint a hover/pressed fill. -->
+            <StackPanel Grid.Column="2"
+                        Orientation="Horizontal"
+                        Spacing="2"
+                        Margin="0,0,-2,0"
+                        VerticalAlignment="Center">
+                <!-- HF avatar: shown only when a token is configured and
+                     whoami-v2 resolves (see LoadAvatarAsync). Circular picture
+                     with a presence dot; click opens the user's hf.co profile. -->
+                <Button x:Name="AvatarButton"
+                        Click="Avatar_Click"
+                        Padding="3"
+                        MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Visibility="Collapsed"
+                        AutomationProperties.Name="Open your Hugging Face profile"
+                        ToolTipService.ToolTip="Open your Hugging Face profile">
+                    <Grid Width="20" Height="20">
+                        <PersonPicture x:Name="AvatarPicture"
+                                       Width="20" Height="20" />
+                        <!-- Presence dot pinned to the bottom-right of the circle -->
+                        <Ellipse Width="7" Height="7"
+                                 Fill="#3FB950"
+                                 Stroke="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                                 StrokeThickness="1"
+                                 HorizontalAlignment="Right"
+                                 VerticalAlignment="Bottom" />
+                    </Grid>
+                </Button>
+                <Button Click="Settings_Click"
+                        Padding="6"
+                        MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        AutomationProperties.Name="Settings"
+                        ToolTipService.ToolTip="Settings">
+                    <FontIcon Glyph="&#xE713;"
+                              FontSize="14" />
+                </Button>
+                <Button Click="Quit_Click"
+                        Padding="6"
+                        MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        AutomationProperties.Name="Quit"
+                        ToolTipService.ToolTip="Quit">
+                    <FontIcon Glyph="&#xE7E8;"
+                              FontSize="14" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <Rectangle Grid.Row="1"
+                   Height="1"
+                   Margin="16,0"
+                   Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+        <!-- ============ Section 2: Models (one continuous list; card, stretches) ============
+             One Fluent card holding a single ListView: installed models on
+             top, a subtle "Browse more" separator, then catalog model
+             families (name · sizes · description → details → download). The
+             ListView owns scrolling and virtualization — no outer
+             ScrollViewer, no giant StackPanel. The card also hosts the two
+             details views (installed model and family), swapped in place via
+             visibility (no window, no frame navigation — the tray flyout's
+             compact chrome is preserved, and back/Esc return to the list). -->
+        <Border Grid.Row="2"
+                Margin="16,12,16,12"
+                Padding="8,10"
+                CornerRadius="8"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                Translation="0,0,8">
+            <Border.Shadow>
+                <ThemeShadow />
+            </Border.Shadow>
+            <Grid>
+                <!-- The models panel: heading + empty state + the list + the
+                     browse-section status line. -->
+                <Grid x:Name="ModelsPanel">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" /> <!-- heading -->
+                        <RowDefinition Height="Auto" /> <!-- empty state -->
+                        <RowDefinition Height="*" />    <!-- the list -->
+                        <RowDefinition Height="Auto" /> <!-- browse status -->
+                    </Grid.RowDefinitions>
+
+                    <!-- "Models" heading + link to the running server's API.
+                         The link is styled gray/non-bold (not white/bold) to
+                         read as a subtle href. -->
+                    <StackPanel Grid.Row="0"
+                                Orientation="Horizontal" Spacing="8"
+                                Margin="0,0,-2,4">
+                        <TextBlock Text="Models"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button x:Name="ServerLink"
+                                Click="ServerLink_Click"
+                                Padding="0"
+                                MinWidth="0"
+                                MinHeight="0"
+                                Opacity="0.55"
+                                VerticalAlignment="Center"
+                                ToolTipService.ToolTip="Open WebUI"
+                                AutomationProperties.Name="Open the server WebUI">
+                            <FontIcon Glyph="&#xE8A7;"
+                                      FontSize="14" />
+                        </Button>
+                    </StackPanel>
+
+                    <!-- Empty state — shown when there are no installed
+                         models. The text is set from code
+                         (EmptyStatePresentation) and follows the server
+                         state: starting/installing progress, an actionable
+                         hint once running, an honest failure note when the
+                         server is down. -->
+                    <TextBlock x:Name="NoLocalModelsText"
+                               Grid.Row="1"
+                               Text="Starting the llama server…"
+                               FontSize="13"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               HorizontalAlignment="Center"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,8" />
+
+                    <!-- The single list: installed rows + "Browse more"
+                         separator + family rows, split by the template
+                         selector. Selection is off — rows are self-contained
+                         buttons; the chromeless item style + overridden
+                         background brushes keep the ListView from painting
+                         its own hover/selection over the rows'. -->
+                    <ListView x:Name="ModelsList"
+                              Grid.Row="2"
+                              ItemsSource="{x:Bind Items}"
+                              ItemTemplateSelector="{StaticResource ModelListTemplateSelector}"
+                              ItemContainerStyle="{StaticResource ChromelessListViewItemStyle}"
+                              SelectionMode="None"
+                              IsItemClickEnabled="False"
+                              Padding="0"
+                              Background="Transparent">
+                        <ListView.Resources>
+                            <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="Transparent" />
+                            <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="Transparent" />
+                            <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="Transparent" />
+                        </ListView.Resources>
+                    </ListView>
+
+                    <!-- Browse-section status: "Loading models…" (ring) while
+                         the catalog fetch is in flight; an error + "Try
+                         again" when it fails. Installed models stay usable
+                         either way. -->
+                    <StackPanel x:Name="BrowseStatusPanel"
+                                Grid.Row="3"
+                                Spacing="8"
+                                Margin="0,8,0,0"
+                                VerticalAlignment="Center">
+                        <local:ModelProgressRing x:Name="BrowseStatusRing"
+                                                 Width="16" Height="16"
+                                                 IsIndeterminate="True"
+                                                 HorizontalAlignment="Center" />
+                        <TextBlock x:Name="BrowseStatusText"
+                                   Text="Loading models…"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap" />
+                        <Button x:Name="RetryCatalogButton"
+                                Content="Try again"
+                                Click="RetryCatalog_Click"
+                                HorizontalAlignment="Center"
+                                Visibility="Collapsed"
+                                FontSize="12"
+                                Padding="12,4"
+                                MinHeight="0" />
+                    </StackPanel>
+                </Grid>
+
+                <local:ModelItemDetailsView x:Name="DetailsView"
+                                            Visibility="Collapsed"
+                                            BackRequested="DetailsView_BackRequested" />
+
+                <local:ModelFamilyDetailsView x:Name="FamilyDetailsView"
+                                              Visibility="Collapsed"
+                                              BackRequested="FamilyDetailsView_BackRequested" />
+            </Grid>
+        </Border>
+
+        <!-- ============ Section 3: Hub search (fixed bottom) ============
+             A fixed, always-visible search box querying the Hugging Face
+             Hub for GGUF models, with the results listed directly beneath
+             it (same row shape as the models list, plus a download button
+             that reuses the catalog download pipeline). The results
+             ListView owns its scrollbar — the section grows to its
+             content up to the results cap, then scrolls. -->
+        <StackPanel Grid.Row="3"
+                    Margin="16,0,16,12"
+                    Spacing="6">
+
+            <!-- Hugging Face brand mark left of the search box. The box is
+                 an AutoSuggestBox: typing suggests matching GGUF repos
+                 (debounced Hub queries, ranked by downloads); Enter, choosing
+                 a suggestion or the magnifier runs the full search beneath.
+                 TextMemberPath makes a chosen suggestion fill the box with
+                 its repo id. -->
+            <Grid ColumnSpacing="4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <!-- Brand tile: the same chrome as the model rows' logo
+                     tiles (secondary fill, control corner radius) so the
+                     mark sits in the list's visual language instead of
+                     floating as a bare icon. Exactly the search box's
+                     height (32px — its default MinHeight) and corner
+                     radius, 4px from the box, so the pair reads as one
+                     attached control: [logo][search]. -->
+                <Border Grid.Column="0"
+                        Width="32" Height="32"
+                        CornerRadius="{ThemeResource ControlCornerRadius}"
+                        Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="Hugging Face">
+                    <Image Source="ms-appx:///Assets/huggingface.svg"
+                           Width="18" Height="18"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+                </Border>
+                <AutoSuggestBox x:Name="HubSearchBox"
+                                Grid.Column="1"
+                                PlaceholderText="Search models ..."
+                                QueryIcon="Find"
+                                TextMemberPath="RepoId"
+                                FontSize="13"
+                                ItemTemplate="{StaticResource HubSuggestionTemplate}"
+                                TextChanged="HubSearchBox_TextChanged"
+                                QuerySubmitted="HubSearchBox_QuerySubmitted"
+                                AutomationProperties.Name="Search for models" />
+            </Grid>
+
+            <!-- Search results: hidden until the first query. The status
+                 line mirrors the browse section's (ring while in flight,
+                 a count / no-results / error caption), the ListView reuses
+                 the chromeless row style and owns its scrollbar past the
+                 results cap. -->
+            <StackPanel x:Name="HubResultsPanel"
+                        Visibility="Collapsed"
+                        Spacing="4">
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Center"
+                            Spacing="6">
+                    <local:ModelProgressRing x:Name="HubStatusRing"
+                                             Width="14" Height="14"
+                                             IsIndeterminate="True"
+                                             Visibility="Collapsed"
+                                             VerticalAlignment="Center" />
+                    <TextBlock x:Name="HubStatusText"
+                               FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+                <ListView x:Name="HubResultsList"
+                          MaxHeight="190"
+                          ItemsSource="{x:Bind HubResults}"
+                          ItemTemplateSelector="{StaticResource HubResultsTemplateSelector}"
+                          ItemContainerStyle="{StaticResource ChromelessListViewItemStyle}"
+                          SelectionMode="None"
+                          IsItemClickEnabled="False"
+                          Padding="0"
+                          Background="Transparent">
+                    <ListView.Resources>
+                        <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="Transparent" />
+                        <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="Transparent" />
+                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="Transparent" />
+                    </ListView.Resources>
+                </ListView>
+            </StackPanel>
+        </StackPanel>
+
+        <Rectangle Grid.Row="4"
+                   Height="1"
+                   Margin="16,0"
+                   Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+        <!-- ============ Section 4: Version footer (compact) ============
+             A single centered line: a server-status dot (green = running,
+             red = crashed, amber = starting, gray = stopped), the app's
+             version (no name) and the resolved llama.cpp version separated
+             by " - ", and a small relaunch button that appears only when
+             the server is down. Bold theme foreground so it reads as a clear
+             caption under the models list in either OS theme. -->
+        <StackPanel Grid.Row="5"
+                    Margin="16,8,16,10"
+                    HorizontalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="6">
+            <Ellipse x:Name="ServerStatusDot"
+                     Width="8"
+                     Height="8"
+                     VerticalAlignment="Center"
+                     Fill="#8B949E" />
+            <TextBlock x:Name="VersionText"
+                       FontSize="11"
+                       FontWeight="SemiBold"
+                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+            <!-- Dev-build badge: shown only when the app runs unpackaged
+                 (a local `dotnet publish`), never in the MSIX release, so a
+                 dev build can't be mistaken for the installed one. -->
+            <TextBlock x:Name="DevBuildBadge"
+                       Text="dev"
+                       FontSize="11"
+                       Visibility="Collapsed"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                       ToolTipService.ToolTip="Development build (unpackaged)" />
+            <!-- Device indicator: the GPU card glyph (accent color) when the
+                 llama binary's device probe (llama - -list-devices) reports
+                 accelerator devices (CUDA / Vulkan) — the tooltip names them
+                 with their free memory; the CPU chip glyph (dimmed) when the
+                 probe succeeds but finds no accelerator. Hidden entirely on
+                 a failed probe or before the binary is resolved. -->
+            <FontIcon x:Name="GpuIndicator"
+                      Glyph="&#xEC4E;"
+                      FontSize="13"
+                      VerticalAlignment="Center"
+                      Visibility="Collapsed"
+                      AutomationProperties.Name="GPU acceleration available">
+                <!-- The accent brush by hand: this Windows App SDK has no
+                     "SystemAccentColorBrush" theme resource (referencing it
+                     throws a XAML parse error at startup), but the base
+                     SystemAccentColor exists in every theme. -->
+                <FontIcon.Foreground>
+                    <SolidColorBrush Color="{ThemeResource SystemAccentColor}" />
+                </FontIcon.Foreground>
+            </FontIcon>
+            <FontIcon x:Name="CpuIndicator"
+                      Glyph="&#xE950;"
+                      FontSize="13"
+                      Opacity="0.7"
+                      VerticalAlignment="Center"
+                      Visibility="Collapsed"
+                      AutomationProperties.Name="No accelerator detected" />
+            <Button x:Name="ServerRestartButton"
+                    Click="ServerRestart_Click"
+                    Padding="4"
+                    MinWidth="0"
+                    MinHeight="0"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    VerticalAlignment="Center"
+                    Visibility="Collapsed"
+                    AutomationProperties.Name="Relaunch the llama server"
+                    ToolTipService.ToolTip="Relaunch the llama server">
+                <FontIcon Glyph="&#xE72C;"
+                          FontSize="11"
+                          Opacity="0.7" />
+            </Button>
+        </StackPanel>
+
+    </Grid>
+    </UserControl>
+</Window>

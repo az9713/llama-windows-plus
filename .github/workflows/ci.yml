@@ -1,0 +1,30 @@
+name: CI
+
+# Continuous integration: build & test on every push/PR to main.
+# Produces UNSIGNED MSIX artifacts for review. Signing only happens in
+# release.yml (on version tags) to conserve the Trusted Signing quota and to
+# keep signing secrets away from forked PR builds.
+#
+# All actual work lives in the reusable _build.yml (shared with release.yml,
+# so the two can never drift apart): tests first, then MSIX packaging only
+# if they pass.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & test
+    uses: ./.github/workflows/_build.yml

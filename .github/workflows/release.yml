@@ -1,0 +1,344 @@
+name: Release
+
+# Tests and compiles each architecture once via _build.yml.
+# GitHub: sign the original MSIX packages and bundle with Azure Trusted Signing.
+# Store: repackage the unsigned build outputs with the Partner Center Publisher,
+# then upload an unsigned bundle. Microsoft signs the Store distribution.
+#
+# Required repo secrets for GitHub package signing:
+#   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+#   AZURE_TS_ENDPOINT, AZURE_TS_ACCOUNT_NAME, AZURE_TS_PROFILE_NAME
+#
+# Package.appxmanifest keeps the Azure certificate subject for GitHub releases.
+# The Store publisher override is confined to store_bundle below. The existing
+# Identity/Name and Properties/PublisherDisplayName must also match Partner
+# Center > Product management > Product identity.
+#
+# Store credentials and environment setup: docs/store-publishing.md.
+# STORE_NO_COMMIT defaults to draft-only; set the variable to false explicitly
+# to commit a submission to certification.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required to create the GitHub Release & upload assets
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build & test
+    uses: ./.github/workflows/_build.yml
+    with:
+      # Stamp the MSIX identity version from the tag (a non-version ref, e.g.
+      # manual dispatch from a branch, keeps the committed manifest version).
+      tag: ${{ github.ref_name }}
+
+  sign:
+    name: Sign MSIX (Trusted Signing, ${{ matrix.rid }})
+    needs: build
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+          - rid: win-arm64
+    steps:
+      - name: Download unsigned MSIX
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
+          path: unsigned/${{ matrix.rid }}
+
+      - name: Sign MSIX (Azure Trusted Signing)
+        uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          azure-tenant-id:              ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:              ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret:          ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint:                     ${{ secrets.AZURE_TS_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TS_ACCOUNT_NAME }}
+          certificate-profile-name:     ${{ secrets.AZURE_TS_PROFILE_NAME }}
+          files-folder:                 unsigned/${{ matrix.rid }}
+          files-folder-filter:          msix
+          files-folder-recurse:         false
+          file-digest:                  SHA256
+          timestamp-rfc3161:            http://timestamp.acs.microsoft.com/
+          timestamp-digest:             SHA256
+
+      - name: Upload signed MSIX
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: LlamaApp-msix-${{ matrix.rid }}-${{ github.sha }}
+          path: unsigned/${{ matrix.rid }}/**/*.msix
+          if-no-files-found: error
+
+  bundle:
+    name: Create & sign .msixbundle
+    needs: sign
+    runs-on: windows-latest
+    steps:
+      - name: Download signed MSIX (all architectures)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: LlamaApp-msix-*-${{ github.sha }}
+          path: signed
+          merge-multiple: true
+
+      - name: Locate MakeAppx.exe
+        id: makeappx
+        shell: pwsh
+        run: |
+          # Pick the highest-versioned makeappx.exe from the Windows SDK bin
+          # tree (windows-latest ships several side-by-side).
+          $exe = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Directory |
+            Sort-Object Name -Descending |
+            Get-ChildItem -Path { $_.FullName } -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq 'x64' } |
+            Select-Object -First 1
+          if (-not $exe) { throw "makeappx.exe not found under Windows Kits" }
+          Write-Host "Using: $($exe.FullName)"
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Build .msixbundle
+        shell: pwsh
+        env:
+          # Via env, never ${{ }}-interpolated into the script body: a tag
+          # name is attacker-controllable (anyone who can push tags) and
+          # would otherwise be injected verbatim into this PowerShell block.
+          TAG: ${{ github.ref_name }}
+        run: |
+          New-Item -ItemType Directory -Force bundle-input,bundle | Out-Null
+          Get-ChildItem signed -Recurse -Filter *.msix |
+            Copy-Item -Destination bundle-input
+          & "${{ steps.makeappx.outputs.path }}" bundle /d bundle-input /p "bundle/LlamaApp-${env:TAG}.msixbundle" /v
+
+      - name: Sign .msixbundle (Azure Trusted Signing)
+        uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          azure-tenant-id:              ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:              ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret:          ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint:                     ${{ secrets.AZURE_TS_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TS_ACCOUNT_NAME }}
+          certificate-profile-name:     ${{ secrets.AZURE_TS_PROFILE_NAME }}
+          files-folder:                 bundle
+          files-folder-filter:          msixbundle
+          files-folder-recurse:         false
+          file-digest:                  SHA256
+          timestamp-rfc3161:            http://timestamp.acs.microsoft.com/
+          timestamp-digest:             SHA256
+
+      - name: Upload .msixbundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: LlamaApp-msixbundle-${{ github.sha }}
+          path: bundle/*.msixbundle
+          if-no-files-found: error
+
+  # Build a separate Store artifact from the same unsigned MSIX payloads.
+  # Keep its artifact name outside the GitHub release's LlamaApp-msix* glob.
+  store_bundle:
+    name: Create unsigned Microsoft Store bundle
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    env:
+      STORE_PUBLISHER: ${{ vars.PARTNER_CENTER_PUBLISHER_ID }}
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Download unsigned MSIX (all architectures)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: msix-unsigned-*-${{ github.sha }}
+          path: store-unsigned
+          # Preserve per-architecture artifact directories.
+          merge-multiple: false
+
+      - name: Repackage MSIX with Store identity and create unsigned bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdkBin = 'C:\Program Files (x86)\Windows Kits\10\bin'
+          $makeAppx = Get-ChildItem $sdkBin -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName 'x64\makeappx.exe' } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+          if (-not $makeAppx) { throw 'makeappx.exe not found under Windows Kits' }
+          Write-Host "Using: $makeAppx"
+
+          New-Item -ItemType Directory -Force store-unpacked,store-packages,store-bundle | Out-Null
+          $packageName = $null
+          $packageVersion = $null
+          $publisherDisplayName = $null
+          foreach ($architecture in @('x64', 'arm64')) {
+            $rid = "win-$architecture"
+            $artifactDir = Join-Path $PWD "store-unsigned/msix-unsigned-$rid-$env:SOURCE_SHA"
+            $packages = @(Get-ChildItem -LiteralPath $artifactDir -Recurse -File -Filter *.msix)
+            if ($packages.Count -ne 1) {
+              throw "Expected exactly one unsigned MSIX for $rid; found $($packages.Count)"
+            }
+
+            $unpacked = Join-Path $PWD "store-unpacked/$rid"
+            & $makeAppx unpack /p $packages[0].FullName /d $unpacked /o /v
+            if ($LASTEXITCODE -ne 0) { throw "MakeAppx unpack failed for $rid ($LASTEXITCODE)" }
+
+            $manifestPath = Join-Path $unpacked 'AppxManifest.xml'
+            $manifest = [System.Xml.XmlDocument]::new()
+            $manifest.PreserveWhitespace = $true
+            $manifest.Load($manifestPath)
+            $ns = [System.Xml.XmlNamespaceManager]::new($manifest.NameTable)
+            $ns.AddNamespace('appx', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10')
+            $identity = $manifest.SelectSingleNode('/appx:Package/appx:Identity', $ns)
+            $displayName = $manifest.SelectSingleNode('/appx:Package/appx:Properties/appx:PublisherDisplayName', $ns)
+            if (-not $identity -or -not $displayName) { throw "Missing package identity in $rid" }
+            if ($identity.GetAttribute('ProcessorArchitecture') -ne $architecture) {
+              throw "Unexpected ProcessorArchitecture in $rid"
+            }
+
+            # Both packages must belong to the same version and package family.
+            if ($null -eq $packageName) {
+              $packageName = $identity.GetAttribute('Name')
+              $packageVersion = $identity.GetAttribute('Version')
+              $publisherDisplayName = $displayName.InnerText
+            } elseif ($identity.GetAttribute('Name') -cne $packageName -or
+                      $identity.GetAttribute('Version') -ne $packageVersion -or
+                      $displayName.InnerText -cne $publisherDisplayName) {
+              throw 'Store package name, version, or publisher display name differs between architectures'
+            }
+
+            # Change only the Store copy. Keep the compiled payload, package
+            # name, display name and version from _build.yml unchanged.
+            $identity.SetAttribute('Publisher', $env:STORE_PUBLISHER)
+            $manifest.Save($manifestPath)
+
+            # Regenerate the package footprint after editing the manifest.
+            # LiteralPath is required for the brackets in [Content_Types].xml.
+            foreach ($file in @('AppxBlockMap.xml', '[Content_Types].xml', 'AppxSignature.p7x')) {
+              $path = Join-Path $unpacked $file
+              if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+            }
+
+            $outputPackage = Join-Path $PWD "store-packages/LlamaApp-Store-$architecture.msix"
+            # WinUI assets can use language/scale qualifiers; keep all other validation.
+            & $makeAppx pack /d $unpacked /p $outputPackage /l /o /v
+            if ($LASTEXITCODE -ne 0) { throw "MakeAppx pack failed for $rid ($LASTEXITCODE)" }
+          }
+
+          # Without /bv, MakeAppx generates a date-based bundle version.
+          # Use the version already stamped by _build.yml instead.
+          $bundlePath = Join-Path $PWD "store-bundle/LlamaApp-Store-$packageVersion.msixbundle"
+          & $makeAppx bundle /d store-packages /p $bundlePath /bv $packageVersion /o /v
+          if ($LASTEXITCODE -ne 0) { throw "MakeAppx bundle failed ($LASTEXITCODE)" }
+
+          Write-Host "Store package: $packageName $packageVersion"
+          Write-Host "Store publisher: $env:STORE_PUBLISHER"
+          Write-Host "Publisher display name: $publisherDisplayName"
+
+      # Deliberately unsigned: the Store signs this package during submission.
+      - name: Upload unsigned Store bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: LlamaApp-store-bundle-${{ github.sha }}
+          path: store-bundle/*.msixbundle
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: LlamaApp-msix*-${{ github.sha }}
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/**/*.msix
+            artifacts/**/*.msixbundle
+
+  # Submit the separate Store bundle only after the GitHub release succeeds.
+  # The Microsoft Store supplies the signature; never upload the GitHub bundle.
+  store:
+    name: Publish to Microsoft Store
+    needs: [release, store_bundle]
+    # Version tags only — a manual dispatch from a branch must never submit.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    # Human gate: add required reviewers to the "microsoft-store" environment
+    # in repo settings so every Store submission gets a go-ahead before it
+    # enters certification.
+    environment: microsoft-store
+    steps:
+      - name: Download the unsigned Store .msixbundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: LlamaApp-store-bundle-${{ github.sha }}
+          path: store
+
+      # Official setup action for the MSStore Developer CLI — it installs
+      # the CLI the supported way (its own version governs which CLI lands
+      # on the runner). Pinned to a commit SHA like every other action here.
+      - name: Set up the Microsoft Store Developer CLI
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+
+      # msstore's officially supported non-interactive configuration:
+      # reconfigure stores the Partner Center identity and the Entra client
+      # secret for all later msstore commands on this runner.
+      - name: Configure Partner Center credentials
+        shell: pwsh
+        env:
+          PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          PARTNER_CENTER_SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          PARTNER_CENTER_CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          PARTNER_CENTER_CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+        run: |
+          foreach ($name in @('PARTNER_CENTER_TENANT_ID', 'PARTNER_CENTER_SELLER_ID',
+                              'PARTNER_CENTER_CLIENT_ID', 'PARTNER_CENTER_CLIENT_SECRET')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "$name is not configured — see docs/store-publishing.md"
+            }
+          }
+          msstore reconfigure `
+            --tenantId $env:PARTNER_CENTER_TENANT_ID `
+            --sellerId $env:PARTNER_CENTER_SELLER_ID `
+            --clientId $env:PARTNER_CENTER_CLIENT_ID `
+            --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
+          if ($LASTEXITCODE -ne 0) { throw "msstore reconfigure failed ($LASTEXITCODE)" }
+
+      # Leave the submission as a draft unless STORE_NO_COMMIT=false.
+      - name: Publish submission to Partner Center
+        shell: pwsh
+        env:
+          PARTNER_CENTER_APP_ID: ${{ secrets.PARTNER_CENTER_APP_ID }}
+          STORE_NO_COMMIT: ${{ vars.STORE_NO_COMMIT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PARTNER_CENTER_APP_ID)) {
+            throw 'PARTNER_CENTER_APP_ID is not configured'
+          }
+          $bundles = @(Get-ChildItem store -File -Filter *.msixbundle)
+          if ($bundles.Count -ne 1) {
+            throw "Expected exactly one unsigned Store bundle; found $($bundles.Count)"
+          }
+          $publishArgs = @('publish', $bundles[0].FullName, '--appId', $env:PARTNER_CENTER_APP_ID)
+          if ($env:STORE_NO_COMMIT -ne 'false') {
+            $publishArgs += '--noCommit'
+          }
+          msstore @publishArgs
+          if ($LASTEXITCODE -ne 0) { throw "msstore publish failed ($LASTEXITCODE)" }

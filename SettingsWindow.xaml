@@ -1,0 +1,1006 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Window
+    x:Class="LlamaApp.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+        A centered settings window (separate from the tray flyout) styled after
+        the Windows 11 Settings app: a custom Mica titlebar, a left
+        NavigationView (General / Identity / Llama) over a Mica backdrop, and a
+        footer action bar with Save / Cancel. Each page is a stack of rounded
+        "SettingsCards" (icon tile + title/description + control). Saves to
+        <see cref="Settings"/> on Save; discards on Cancel. See
+        SettingsWindow.xaml.cs for sizing (fixed DIP size, scaled by the
+        monitor's DPI, centered on the cursor's monitor).
+
+        Cards use a stacked layout (title row, then wrapping description, then a
+        full-width control) so descriptive text never gets cropped and the
+        inputs get the full card width rather than a cramped right column. The
+        Llama page additionally arranges its cards in one aligned two-column
+        grid: paired settings sit side by side, wide settings span both
+        columns, and every card shares the same left edge and gutter. Within a
+        pair, each card anchors its control to the bottom of the card so the
+        two inputs line up no matter how long their descriptions wrap.
+    -->
+    <Window.SystemBackdrop>
+        <MicaBackdrop Kind="Base" />
+    </Window.SystemBackdrop>
+
+    <Grid RowSpacing="0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" /> <!-- Custom titlebar (drag region) -->
+            <RowDefinition Height="*" />    <!-- Body -->
+        </Grid.RowDefinitions>
+
+        <!-- Custom titlebar: Mica extends behind it, with an app label on
+             the left and the system caption buttons (close) on the right.
+             Marked as the drag region via SetTitleBar() in the code-behind. -->
+        <Grid x:Name="AppTitleBar"
+              Grid.Row="0"
+              Height="40"
+              Padding="32,0,0,0">
+            <StackPanel Orientation="Horizontal"
+                        Spacing="8"
+                        VerticalAlignment="Center">
+                <Image Source="{ThemeResource BrandLogoSource}"
+                       Width="16" Height="16"
+                       Stretch="Uniform"
+                       VerticalAlignment="Center" />
+                <TextBlock Text="Settings"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Opacity="0.85"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Body: left nav + page content, then the footer action bar -->
+        <Grid Grid.Row="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />    <!-- NavigationView -->
+                <RowDefinition Height="Auto" /> <!-- Divider -->
+                <RowDefinition Height="Auto" /> <!-- Footer actions -->
+            </Grid.RowDefinitions>
+
+            <!-- Left menubar, Windows 11 Settings style: always-expanded pane
+                 (no hamburger, no back button, no built-in Settings item).
+                 Transparent chrome so the Mica backdrop flows through both the
+                 pane and the content area. -->
+            <NavigationView x:Name="NavView"
+                            Grid.Row="0"
+                            PaneDisplayMode="Left"
+                            OpenPaneLength="190"
+                            IsPaneToggleButtonVisible="False"
+                            IsBackButtonVisible="Collapsed"
+                            IsSettingsVisible="False"
+                            AlwaysShowHeader="False"
+                            Background="Transparent"
+                            SelectionChanged="NavView_SelectionChanged">
+                <NavigationView.Resources>
+                    <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground"
+                                     Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground"
+                                     Color="Transparent" />
+                    <!-- Selection pill in the brand orange instead of the
+                         system accent, matching the flyout's wordmark. -->
+                    <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground"
+                                     Color="#FF8A3D" />
+                </NavigationView.Resources>
+                <NavigationView.MenuItems>
+                    <NavigationViewItem Content="General"
+                                        Tag="general"
+                                        IsSelected="True"
+                                        ToolTipService.ToolTip="Startup and storage">
+                        <NavigationViewItem.Icon>
+                            <FontIcon Glyph="&#xE713;" />
+                        </NavigationViewItem.Icon>
+                    </NavigationViewItem>
+                    <NavigationViewItem Content="Identity"
+                                        Tag="identity"
+                                        ToolTipService.ToolTip="Hugging Face account">
+                        <NavigationViewItem.Icon>
+                            <FontIcon Glyph="&#xE77B;" />
+                        </NavigationViewItem.Icon>
+                    </NavigationViewItem>
+                    <NavigationViewItem Content="Llama"
+                                        Tag="llama"
+                                        ToolTipService.ToolTip="Local llama server">
+                        <NavigationViewItem.Icon>
+                            <ImageIcon Source="{ThemeResource BrandLogoSource}" />
+                        </NavigationViewItem.Icon>
+                    </NavigationViewItem>
+                </NavigationView.MenuItems>
+
+                <!-- Pages: exactly one is visible at a time, switched from
+                     NavView_SelectionChanged. Each page has a Fluent page
+                     header (subtitle style) above its cards. No right padding
+                     here: the ScrollViewer reaches the window's right edge so
+                     the overlay scrollbar hugs it (Windows 11 Settings style)
+                     instead of floating mid-gutter; each page reserves the
+                     scrollbar lane in its own padding, identically, so all
+                     tabs render the same insets whether or not the bar shows.
+                     Every page ScrollViewer uses HorizontalScrollBarVisibility=
+                     Disabled (not Hidden): Hidden still measures content with
+                     infinite width (ScrollMode only gates touch input), which
+                     let long unwrapped content silently overflow the window. -->
+                <Grid Padding="8,0,0,8">
+
+                    <!-- ============ General page ============ -->
+                    <ScrollViewer x:Name="GeneralPage"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  HorizontalScrollMode="Disabled">
+                        <!-- Right padding reserves the overlay scrollbar's
+                             lane (~12px expanded + gap) on every page, so the
+                             bar never covers the cards and every tab has the
+                             same insets whether or not the bar shows. -->
+                        <StackPanel Spacing="10" Padding="8,4,20,8">
+                            <TextBlock Text="General"
+                                       Style="{ThemeResource SubtitleTextBlockStyle}"
+                                       Margin="4,4,0,10" />
+
+                            <!-- Launch at startup (toggle) -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0"
+                                            Width="36" Height="36"
+                                            CornerRadius="{ThemeResource ControlCornerRadius}"
+                                            Background="{StaticResource BrandAccentBrush}"
+                                            VerticalAlignment="Top">
+                                        <FontIcon Glyph="&#xE7B5;"
+                                                  FontSize="16"
+                                                  Foreground="White"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1" Spacing="2">
+                                        <TextBlock Text="Launch at startup"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold" />
+                                        <TextBlock Text="Start Llama automatically when you sign in to Windows."
+                                                   FontSize="12"
+                                                   Opacity="0.6"
+                                                   TextWrapping="WrapWholeWords" />
+                                    </StackPanel>
+                                    <CheckBox x:Name="LaunchAtStartupBox"
+                                              Grid.Column="2"
+                                              VerticalAlignment="Top"
+                                              MinWidth="0"
+                                              ToolTipService.ToolTip="Run Llama when Windows starts" />
+                                </Grid>
+                            </Border>
+
+                            <!-- Chat overlay shortcut (informational — the
+                                 hotkey is hard-coded Alt+Space; this card is
+                                 how a user discovers it exists). -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0"
+                                            Width="36" Height="36"
+                                            CornerRadius="{ThemeResource ControlCornerRadius}"
+                                            Background="{StaticResource BrandAccentBrush}"
+                                            VerticalAlignment="Top">
+                                        <FontIcon Glyph="&#xE765;"
+                                                  FontSize="16"
+                                                  Foreground="White"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1" Spacing="2">
+                                        <TextBlock Text="Chat overlay"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold" />
+                                        <TextBlock FontSize="12"
+                                                   Opacity="0.6"
+                                                   TextWrapping="WrapWholeWords">
+                                            <Run Text="Press" />
+                                            <Run Text="Alt+Space" FontWeight="SemiBold" />
+                                            <Run Text="anywhere to open the chat overlay for the loaded model. Press Esc to dismiss it." />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <!-- Local models cache directory -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE8B7;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Local Models Cache"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Where downloaded model files are stored on disk. Pick a drive with enough free space for the models you plan to keep."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="CacheBox"
+                                                 Grid.Column="0"
+                                                 PlaceholderText="Path to model folder"
+                                                 IsReadOnly="False"
+                                                 ToolTipService.ToolTip="Path to the local models cache" />
+                                        <Button x:Name="BrowseButton"
+                                                Grid.Column="1"
+                                                Content="Browse…"
+                                                Click="Browse_Click"
+                                                ToolTipService.ToolTip="Pick a folder" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Model discovery: extra folders scanned for models
+                                 the user already has. Distinct from the cache
+                                 folder above — that stays where downloads go. -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE8E5;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Model folders"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Folders to look for models you already have — scanned recursively, and nothing is copied or moved. Downloads keep going to the cache folder above; add folders here for models kept elsewhere."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <ItemsControl x:Name="ModelFolderList"
+                                                  Grid.Row="0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="x:String">
+                                                <Grid ColumnSpacing="8"
+                                                      Padding="0,3">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{x:Bind}"
+                                                               FontSize="12"
+                                                               VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTipService.ToolTip="{x:Bind}" />
+                                                    <Button Grid.Column="1"
+                                                            Content="Remove"
+                                                            FontSize="12"
+                                                            Padding="10,3"
+                                                            Tag="{x:Bind}"
+                                                            Click="RemoveModelFolder_Click"
+                                                            ToolTipService.ToolTip="Stop looking for models in this folder" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Button x:Name="AddModelFolderButton"
+                                            Content="Add a folder…"
+                                            HorizontalAlignment="Left"
+                                            Click="AddModelFolder_Click"
+                                            ToolTipService.ToolTip="Pick a folder to scan for models" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Logs (informational — where the app writes its
+                                 daily log files; the same "Open Folder" button
+                                 pattern as the Installation Folder card). -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE8A5;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Logs"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Where Llama writes its daily log files — include them when reporting a problem."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <StackPanel Orientation="Horizontal"
+                                                Spacing="8">
+                                        <Button x:Name="OpenLogFolderButton"
+                                                Content="Open Folder"
+                                                Click="OpenLogFolder_Click"
+                                                ToolTipService.ToolTip="Show the log folder in File Explorer" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- ============ Identity page ============ -->
+                    <ScrollViewer x:Name="IdentityPage"
+                                  Visibility="Collapsed"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  HorizontalScrollMode="Disabled">
+                        <StackPanel Spacing="10" Padding="8,4,20,8">
+                            <TextBlock Text="Identity"
+                                       Style="{ThemeResource SubtitleTextBlockStyle}"
+                                       Margin="4,4,0,10" />
+
+                            <!-- Hugging Face token (password style — masked) -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <!-- Accent icon tile -->
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE72E;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Hugging Face Token"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <!-- Description (wraps freely across the full card width) -->
+                                    <RichTextBlock FontSize="12"
+                                                   Opacity="0.6"
+                                                   TextWrapping="WrapWholeWords"
+                                                   IsTextSelectionEnabled="False">
+                                        <Paragraph>
+                                            Used to pull private or gated models. Optional — leave
+                                            blank for public repos. Stored encrypted for this Windows
+                                            account. Create one at
+                                            <Hyperlink NavigateUri="https://huggingface.co/settings/tokens">
+                                                huggingface.co/settings/tokens
+                                            </Hyperlink>. Changes apply the next time the app starts —
+                                            the running server keeps the previous token until then.
+                                        </Paragraph>
+                                    </RichTextBlock>
+                                    <!-- Control: full card width -->
+                                    <PasswordBox x:Name="TokenBox"
+                                                 PlaceholderText="hf_…"
+                                                 PasswordRevealMode="Peek"
+                                                 ToolTipService.ToolTip="Paste your Hugging Face access token" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- ============ Llama page ============ -->
+                    <!--
+                        One aligned two-column grid for the whole page: each row
+                        is a pair of half-width cards (or one full-width card
+                        spanning both columns), so every card shares the same
+                        left edge, the same 12px gutter, and the same vertical
+                        rhythm. Within a row the taller card sets the height and
+                        the shorter one stretches to match.
+                    -->
+                    <ScrollViewer x:Name="LlamaPage"
+                                  Visibility="Collapsed"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  HorizontalScrollMode="Disabled">
+                        <Grid Padding="8,4,20,8"
+                              RowSpacing="10"
+                              ColumnSpacing="12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" /> <!-- Page header -->
+                                <RowDefinition Height="Auto" /> <!-- Port + listen address -->
+                                <RowDefinition Height="Auto" /> <!-- Idle unload + max loaded models -->
+                                <RowDefinition Height="Auto" /> <!-- Key/Value cache -->
+                                <RowDefinition Height="Auto" /> <!-- Custom serve arguments -->
+                                <RowDefinition Height="Auto" /> <!-- Installation folder -->
+                                <RowDefinition Height="Auto" /> <!-- llama.cpp runtime -->
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Row="0"
+                                       Grid.ColumnSpan="2"
+                                       Text="Llama"
+                                       Style="{ThemeResource SubtitleTextBlockStyle}"
+                                       Margin="4,4,0,0" />
+
+                            <!-- Llama server port -->
+                            <Border Grid.Row="1"
+                                    Grid.Column="0"
+                                    Padding="16,14"
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <Grid RowSpacing="10">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /> <!-- Header -->
+                                        <RowDefinition Height="Auto" /> <!-- Description -->
+                                        <RowDefinition Height="*" />    <!-- Control, bottom-aligned -->
+                                    </Grid.RowDefinitions>
+                                    <Grid Grid.Row="0"
+                                          ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE968;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Llama Server Port"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Grid.Row="1"
+                                               Text="Port the local llama server listens on (1–65535). Takes effect the next time Llama starts."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <NumberBox x:Name="PortBox"
+                                               Grid.Row="2"
+                                               VerticalAlignment="Bottom"
+                                               Minimum="1"
+                                               Maximum="65535"
+                                               SmallChange="1"
+                                               LargeChange="10"
+                                               SpinButtonPlacementMode="Hidden"
+                                               ToolTipService.ToolTip="Port for the local llama server (1–65535)" />
+                                </Grid>
+                            </Border>
+
+                            <!-- Listen address (all interfaces / localhost / per-interface IPs) -->
+                            <Border Grid.Row="1"
+                                    Grid.Column="1"
+                                    Padding="16,14"
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <Grid RowSpacing="10">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /> <!-- Header -->
+                                        <RowDefinition Height="Auto" /> <!-- Description -->
+                                        <RowDefinition Height="*" />    <!-- Control, bottom-aligned -->
+                                    </Grid.RowDefinitions>
+                                    <Grid Grid.Row="0"
+                                          ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE943;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Listen On"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Grid.Row="1"
+                                               Text="Network address the llama server binds to — localhost (127.0.0.1, this machine only), a specific interface's IP, or all interfaces (0.0.0.0). Beyond localhost the server is reachable from other devices on your network; Llama then requires an API key it generates for you. Takes effect the next time the app starts."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <StackPanel Grid.Row="2"
+                                                Spacing="10"
+                                                VerticalAlignment="Bottom">
+                                        <ComboBox x:Name="ListenAddressBox"
+                                                  HorizontalAlignment="Stretch"
+                                                  ToolTipService.ToolTip="Address the llama server listens on" />
+                                        <!-- API key for a non-loopback bind: llama.cpp's WebUI
+                                             reads its key from a typed dialog (no URL form),
+                                             so the user needs to see and copy it. -->
+                                        <StackPanel x:Name="ApiKeyPanel"
+                                                    Spacing="6"
+                                                    Visibility="Collapsed">
+                                            <TextBlock Text="API key — the llama WebUI may ask for it once; copy it if it does. The chat overlay and Llama itself connect automatically."
+                                                       FontSize="12"
+                                                       Opacity="0.6"
+                                                       TextWrapping="Wrap" />
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBox x:Name="ApiKeyBox"
+                                                         IsReadOnly="True"
+                                                         FontFamily="Consolas"
+                                                         PlaceholderText="Generated when you save"
+                                                         ToolTipService.ToolTip="The app-generated server API key" />
+                                                <Button x:Name="CopyApiKeyButton"
+                                                        Grid.Column="1"
+                                                        Content="Copy"
+                                                        Click="CopyApiKey_Click"
+                                                        ToolTipService.ToolTip="Copy the API key to the clipboard" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <!-- Unload model when idle (5m / 15m / 1h / Never) -->
+                            <Border Grid.Row="2"
+                                    Grid.Column="0"
+                                    Padding="16,14"
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <Grid RowSpacing="10">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /> <!-- Header -->
+                                        <RowDefinition Height="Auto" /> <!-- Description -->
+                                        <RowDefinition Height="*" />    <!-- Control, bottom-aligned -->
+                                    </Grid.RowDefinitions>
+                                    <Grid Grid.Row="0"
+                                          ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE916;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Unload Model When Idle"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Grid.Row="1"
+                                               Text="Free the model's memory after it's been idle for a while. The model stays available — the next chat request reloads it automatically. Applies the next time the llama server starts."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <ComboBox x:Name="IdleUnloadBox"
+                                              Grid.Row="2"
+                                              VerticalAlignment="Bottom"
+                                              HorizontalAlignment="Stretch"
+                                              ToolTipService.ToolTip="How long a loaded model may stay idle before it's unloaded from memory">
+                                        <ComboBoxItem Content="After 5 minutes" Tag="300" />
+                                        <ComboBoxItem Content="After 15 minutes" Tag="900" />
+                                        <ComboBoxItem Content="After 1 hour" Tag="3600" />
+                                        <ComboBoxItem Content="Never" Tag="-1" />
+                                    </ComboBox>
+                                </Grid>
+                            </Border>
+
+                            <!-- Max models loaded in parallel (0 = unlimited) -->
+                            <Border Grid.Row="2"
+                                    Grid.Column="1"
+                                    Padding="16,14"
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <Grid RowSpacing="10">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /> <!-- Header -->
+                                        <RowDefinition Height="Auto" /> <!-- Description -->
+                                        <RowDefinition Height="*" />    <!-- Control, bottom-aligned -->
+                                    </Grid.RowDefinitions>
+                                    <Grid Grid.Row="0"
+                                          ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE8F1;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Max Loaded Models"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Grid.Row="1"
+                                               Text="Maximum number of models the router keeps loaded at the same time. 0 means unlimited. Applies the next time the llama server starts."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <NumberBox x:Name="ModelsMaxBox"
+                                               Grid.Row="2"
+                                               VerticalAlignment="Bottom"
+                                               Minimum="0"
+                                               SmallChange="1"
+                                               LargeChange="4"
+                                               SpinButtonPlacementMode="Hidden"
+                                               ToolTipService.ToolTip="Maximum number of models loaded at once (0 = unlimited)" />
+                                </Grid>
+                            </Border>
+
+                            <!-- Key/Value cache quantization (K and V) -->
+                            <Border Grid.Row="3"
+                                    Grid.ColumnSpan="2"
+                                    Padding="16,14"
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE950;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Key/Value Cache"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Quantize the key and value tensors independently. Lower precision shrinks the KV cache, which can make a larger context window fit on consumer/prosumer GPUs, with some quality trade-off. Applies the next time the llama server starts."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Spacing="6">
+                                            <TextBlock Text="Key Quantization (K)"
+                                                       FontSize="12"
+                                                       Opacity="0.8" />
+                                            <ComboBox x:Name="KvCacheKBox"
+                                                      HorizontalAlignment="Stretch"
+                                                      ToolTipService.ToolTip="Quantization type for the KV cache key tensor">
+                                                <ComboBoxItem Content="f32" Tag="f32" />
+                                                <ComboBoxItem Content="f16" Tag="f16" />
+                                                <ComboBoxItem Content="bf16" Tag="bf16" />
+                                                <ComboBoxItem Content="q8_0" Tag="q8_0" />
+                                                <ComboBoxItem Content="q4_0" Tag="q4_0" />
+                                                <ComboBoxItem Content="q4_1" Tag="q4_1" />
+                                                <ComboBoxItem Content="iq4_nl" Tag="iq4_nl" />
+                                                <ComboBoxItem Content="q5_0" Tag="q5_0" />
+                                                <ComboBoxItem Content="q5_1" Tag="q5_1" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="6">
+                                            <TextBlock Text="Value Quantization (V)"
+                                                       FontSize="12"
+                                                       Opacity="0.8" />
+                                            <ComboBox x:Name="KvCacheVBox"
+                                                      HorizontalAlignment="Stretch"
+                                                      ToolTipService.ToolTip="Quantization type for the KV cache value tensor">
+                                                <ComboBoxItem Content="f32" Tag="f32" />
+                                                <ComboBoxItem Content="f16" Tag="f16" />
+                                                <ComboBoxItem Content="bf16" Tag="bf16" />
+                                                <ComboBoxItem Content="q8_0" Tag="q8_0" />
+                                                <ComboBoxItem Content="q4_0" Tag="q4_0" />
+                                                <ComboBoxItem Content="q4_1" Tag="q4_1" />
+                                                <ComboBoxItem Content="iq4_nl" Tag="iq4_nl" />
+                                                <ComboBoxItem Content="q5_0" Tag="q5_0" />
+                                                <ComboBoxItem Content="q5_1" Tag="q5_1" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Custom serve arguments (free-form, appended last) -->
+                            <Border Grid.Row="4"
+                                    Grid.ColumnSpan="2"
+                                    Padding="16,14"
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE943;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Custom Serve Arguments"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Extra arguments appended after the built-in ones, so they can override them. Use the same syntax as the llama.cpp command line — quote values that contain spaces. The server's bind flags (--host, --port), --api-key, --models-preset and --models-dir are managed by Llama and can't be used here. Applies the next time the llama server starts; if the server rejects a flag, the failure reason appears on the status dot."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <TextBox x:Name="CustomArgsBox"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             MinHeight="72"
+                                             MaxHeight="140"
+                                             PlaceholderText="--threads 4 --flash-attn"
+                                             ToolTipService.ToolTip="Additional llama serve arguments, appended after the built-in ones" />
+                                    <TextBlock x:Name="CustomArgsErrorText"
+                                               Text=""
+                                               FontSize="12"
+                                               Foreground="#F85149"
+                                               TextWrapping="Wrap"
+                                               Visibility="Collapsed" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Installation folder (read-only — informational,
+                                 not a setting) -->
+                            <Border Grid.Row="5"
+                                    Grid.ColumnSpan="2"
+                                    Padding="16,14"
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE8B7;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Installation Folder"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock x:Name="InstallDescriptionText"
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <!-- Read-only: the location isn't configurable,
+                                         but the box stays selectable/copyable. -->
+                                    <TextBox x:Name="InstallPathBox"
+                                             IsReadOnly="True"
+                                             TextWrapping="NoWrap"
+                                             ToolTipService.ToolTip="Llama installation folder (read-only)" />
+                                    <StackPanel Orientation="Horizontal"
+                                                Spacing="8">
+                                        <Button x:Name="OpenInstallFolderButton"
+                                                Content="Open Folder"
+                                                Click="OpenInstallFolder_Click"
+                                                ToolTipService.ToolTip="Show the folder in File Explorer" />
+                                        <Button x:Name="EmptyInstallFolderButton"
+                                                Content="Remove Llama Files…"
+                                                Click="EmptyInstallFolder_Click"
+                                                ToolTipService.ToolTip="Remove only Llama's install files — the folder is shared with other apps; their files stay untouched. The binary is downloaded again on next launch" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- llama.cpp runtime updater: the weekly auto-update
+                                 (RuntimeUpdateScheduler) made visible — installed
+                                 version, last check, and a manual trigger. -->
+                            <Border Grid.Row="6"
+                                    Grid.ColumnSpan="2"
+                                    Padding="16,14"
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE895;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="llama.cpp Runtime"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock x:Name="RuntimeUpdateDescriptionText"
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <StackPanel Orientation="Horizontal"
+                                                Spacing="8">
+                                        <Button x:Name="CheckRuntimeUpdateButton"
+                                                Content="Check for Updates"
+                                                Click="CheckRuntimeUpdate_Click"
+                                                ToolTipService.ToolTip="Check GitHub for a newer llama.cpp release now" />
+                                        <ProgressRing x:Name="CheckRuntimeUpdateRing"
+                                                      Width="18" Height="18"
+                                                      IsActive="False"
+                                                      Visibility="Collapsed"
+                                                      VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="CheckRuntimeUpdateResultText"
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </ScrollViewer>
+                </Grid>
+            </NavigationView>
+
+            <!-- ============ Footer divider + actions ============ -->
+            <Rectangle Grid.Row="1"
+                       Height="1"
+                       Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+            <StackPanel Grid.Row="2"
+                        Orientation="Horizontal"
+                        Spacing="8"
+                        Padding="24,12,24,16"
+                        HorizontalAlignment="Right">
+                <Button Content="Cancel"
+                        Padding="24,10"
+                        Click="Cancel_Click"
+                        ToolTipService.ToolTip="Discard changes" />
+                <Button Content="Save"
+                        Padding="24,10"
+                        Style="{ThemeResource AccentButtonStyle}"
+                        Click="Save_Click"
+                        ToolTipService.ToolTip="Save changes" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

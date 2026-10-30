@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+        <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+        <OutputType>WinExe</OutputType>
+
+        <!-- WinUI 3 -->
+        <UseWinUI>true</UseWinUI>
+        <EnableMsixTooling>true</EnableMsixTooling>
+        <WindowsPackageType>MSIX</WindowsPackageType>
+
+        <!-- Self-contained Windows App SDK: the runtime DLLs are bundled with
+             the app. WindowsAppSDK 2.x no longer resolves an OS-registered
+             runtime for UNPACKAGED processes without a machine-level runtime
+             install (the 2.5.1 auto-initializer dies with REGDB_E_CLASSNOTREG
+             before any app code runs), and this is how the app has always been
+             run from bin/ ("dotnet run", double-clicking the exe). Bundling
+             also removes the end-user runtime dependency from the shipped
+             MSIX — installs no longer require the Windows App Runtime
+             framework packages. -->
+        <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+
+        <!-- Project Options -->
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+
+        <!-- Ship only English satellite resources: the ~40 locale folders
+             add file count (and some MB) for strings this app doesn't
+             localize. -->
+        <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
+        <!-- WinAppSDK 2.3.1+ XAML performance opt-ins (compiled into the
+             generated entry point via XamlOptionalChanges.EnableChange). These
+             two are behaviorally neutral: FontIcon/BitmapIcon drop a decorative
+             Grid from their visual tree (this app resolves rows by walking the
+             tree for DataContext, which is unaffected), and Style setters with
+             no value stop loading. DefaultStyleOptimizations swaps in the
+             optimized control templates (notably ScrollBar); enabled after a
+             runtime pass over the flyout, Settings and the overlay confirmed
+             everything renders and scrolls. -->
+        <EnabledXamlOptionalChanges>IconNoGridOptimization,OptimizeApplyStyles,DefaultStyleOptimizations</EnabledXamlOptionalChanges>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <RootNamespace>LlamaApp</RootNamespace>
+
+        <!-- Exclude nested sub-project directories from the default item globs.
+             They are compiled by their own .csproj files, not by this one. -->
+        <DefaultItemExcludes>$(DefaultItemExcludes);LlamaApp.Common\**;LlamaApp.HuggingFace\**;LlamaApp.LlamaCpp\**;LlamaApp.LlamaCpp.Tests\**;LlamaApp.Catalog\**;LlamaApp.Tests\**</DefaultItemExcludes>
+
+        <!-- App Options -->
+        <UseRidGraph>true</UseRidGraph>
+        <Platforms>x86;x64;ARM64</Platforms>
+        <ApplicationManifest>app.manifest</ApplicationManifest>
+        <!-- Embed the llama icon in the exe itself: the startup shortcut
+             (StartupHelper) points its IconLocation at the exe, and Explorer
+             falls back to it for unpackaged views of the binary. -->
+        <ApplicationIcon>Assets\llama.ico</ApplicationIcon>
+        <!-- Assembly/file version shown in the app footer (MainWindow reads
+             AssemblyVersion). Keep in sync with Identity@Version in
+             Package.appxmanifest — single-project MSIX takes the package
+             version from the manifest, not from here. -->
+        <Version>0.13.0.0</Version>
+        <!-- Never emit a .msixbundle from the per-arch build. Shipping assets
+             at several scales (Square44x44Logo.scale-*.png etc.) makes MakePri
+             split resources into scale-* resource packages, and the default
+             AppxBundle=Auto then packs main+resources as a .msixbundle in
+             AppxPackageDir — the release workflow stages per-arch *.msix and
+             would find nothing. A flat .msix carries all scales inline. -->
+        <AppxBundle>Never</AppxBundle>
+        <PublishProfile>win-$(Platform).pubxml</PublishProfile>
+        <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)')) >= 8">win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+        <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)')) &lt; 8">win10-x86;win10-x64;win10-arm64</RuntimeIdentifiers>
+
+        <!-- WinUI 3 unpackaged apps must run with a concrete native platform so the
+             apphost and native dependencies (WebView2 runtime, WinAppSDK projections)
+             match an installed runtime. When a solution drives an "Any CPU" build
+             (e.g. the .slnx), the SDK emits an ARM64 apphost on ARM64 Windows; an
+             ARM64-native process cannot load the x64/ARM64EC WebView2 runtime that is
+             installed there, so WebView2 initialization hangs forever and the page
+             renders blank. Coerce Any CPU to x64: the x64 apphost runs natively on
+             x64 Windows and via emulation on ARM64 Windows (matching the installed
+             x64/ARM64EC WebView2 runtime), so WebView2 initializes correctly. -->
+        <PlatformTarget Condition="'$(Platform)' == 'AnyCPU'">x64</PlatformTarget>
+        <Authors>Hugging Face</Authors>
+        <PackageProjectUrl>https://github.com/ggml-org/llama-windows</PackageProjectUrl>
+        <Title>Llama</Title>
+        <RepositoryUrl>https://github.com/ggml-org/llama-windows</RepositoryUrl>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Content Include="Assets\**">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Remove="LlamaApp.slnx"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Exact pins (no floating major ranges): a restore must never
+             silently pick up a newly published or hijacked minor/patch. Bump
+             these deliberately, as a reviewed change. -->
+        <!-- WinAppSDK components instead of the kitchen-sink metapackage: the
+             meta pulls WindowsAppSDK.ML (ONNX Runtime + DirectML + SemanticIndex,
+             ~43 MB), .Search and .Widgets — none of which this app uses (it runs
+             llama.cpp, and the shell services are unused). Versions match what
+             the metapackage resolved transitively. -->
+        <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
+        <!-- The WindowsAppRuntime payload + bootstrap: required by name when
+             not using the metapackage (self-contained unpackaged runs depend
+             on it — see the WindowsAppSDKSelfContained note above). -->
+        <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.5.1" />
+        <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.12" />
+        <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31"/>
+        <PackageReference Include="H.NotifyIcon" Version="2.4.1"/>
+        <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705"/>
+
+        <Manifest Include="$(ApplicationManifest)"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- The app consumes all three helper libraries. They are pure managed
+             (net10.0) assemblies, so they build as Any CPU even when this WinUI
+             app is built for a specific platform (x64/x86/ARM64). The solution
+             files map them to Any CPU for platform-specific builds. -->
+        <ProjectReference Include="LlamaApp.Common\LlamaApp.Common.csproj" />
+        <ProjectReference Include="LlamaApp.HuggingFace\LlamaApp.HuggingFace.csproj" />
+        <ProjectReference Include="LlamaApp.LlamaCpp\LlamaApp.LlamaCpp.csproj" />
+    </ItemGroup>
+
+    <!-- 
+        Defining the "Msix" ProjectCapability here allows the Single-project MSIX Packaging
+        Tools extension to be activated for this project even if the Windows App SDK Nuget
+        package has not yet been restored.
+    -->
+    <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+        <ProjectCapability Include="Msix"/>
+    </ItemGroup>
+    <ItemGroup>
+      <Folder Include="Assets\Logos\" />
+    </ItemGroup>
+
+    <!-- 
+        Defining the "HasPackageAndPublishMenuAddedByProject" property here allows the Solution 
+        Explorer "Package and Publish" context menu entry to be enabled for this project even if 
+        the Windows App SDK Nuget package has not yet been restored.
+    -->
+    <PropertyGroup Condition="'$(DisableHasPackageAndPublishMenuAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+        <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
+    </PropertyGroup>
+</Project>

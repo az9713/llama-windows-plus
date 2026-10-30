@@ -1,0 +1,19 @@
+<Project>
+
+    <!-- Restore writes/reads a committed packages.lock.json per project: the
+         full transitive closure of every build is reviewable, and a restore
+         that would pull different packages shows up as a lock-file diff
+         instead of being silent. -->
+    <PropertyGroup>
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+        <!-- Every RID the repo builds or publishes (the three publish
+             profiles), declared on every project so every restore evaluates
+             the SAME runtime-identifier set. The packages.lock.json is then
+             shape-independent and locked-mode restores (CI) can enforce it:
+             a per-job -p:RuntimeIdentifier override would otherwise make the
+             lock file unstable (NuGet requires the lock's RID set to match
+             the restore's exactly). -->
+        <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+    </PropertyGroup>
+
+</Project>

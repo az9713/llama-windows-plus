@@ -1,0 +1,102 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="HuggingFaceInc.LlamaApp"
+    Publisher="CN=Hugging Face, O=Hugging Face, L=Brooklyn, S=New York, C=US, PostalCode=11201"
+    Version="0.13.0.0" />
+
+  <Properties>
+    <DisplayName>Llama App</DisplayName>
+    <PublisherDisplayName>Hugging Face Inc.</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <!-- At least one TargetDeviceFamily is required by the appx schema. This is
+       a full-trust (runFullTrust) desktop app, so Windows.Desktop alone is the
+       accurate declaration — Windows.Universal would redundantly claim support
+       for every device family (Xbox, HoloLens, ...) the package can't run on
+       anyway. MinVersion 17763 = Windows 10 1809, the floor for WinUI 3 /
+       Windows App SDK; MaxVersionTested only selects compatibility quirks and
+       never gates installation. -->
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="x-generate"/>
+  </Resources>
+
+  <Applications>
+    <Application Id="App"
+      Executable="$targetnametoken$.exe"
+      EntryPoint="$targetentrypoint$">
+      <uap:VisualElements
+        DisplayName="Llama"
+        Description="Llama"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+
+      <!-- "Open With → Llama" for GGUF models: registering the file type
+           puts the app into the shell's Open With list (and lets users pick it
+           as the default .gguf handler). The activation itself arrives through
+           AppInstance.GetActivatedEventArgs() (see App.OnLaunched): the file
+           is linked into the server's models folder and loaded. -->
+      <Extensions>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="gguf">
+            <uap:DisplayName>GGUF Model</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.gguf</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <!-- Share target: Share selected text, a .gguf model from Explorer,
+             or an image (.jpg/.jpeg/.png) to Llama. Shared text is placed in
+             the chat overlay's composer; a shared model follows the same
+             import-and-load path as Open With; a shared image attaches to the
+             chat (image-capable models). StorageItems is what a FILE share
+             (Explorer, Photos) carries — without it in the declared formats,
+             file shares never match this target; Bitmap covers raw-pixel
+             shares (screenshot tools); Text covers selected text. -->
+        <uap:Extension Category="windows.shareTarget">
+          <uap:ShareTarget Description="Send to Llama">
+            <uap:SupportedFileTypes>
+              <uap:FileType>.gguf</uap:FileType>
+              <uap:FileType>.jpg</uap:FileType>
+              <uap:FileType>.jpeg</uap:FileType>
+              <uap:FileType>.png</uap:FileType>
+            </uap:SupportedFileTypes>
+            <uap:DataFormat>Text</uap:DataFormat>
+            <uap:DataFormat>Bitmap</uap:DataFormat>
+            <uap:DataFormat>StorageItems</uap:DataFormat>
+          </uap:ShareTarget>
+        </uap:Extension>
+        <!-- Deep links: llama://chat?prompt=... opens the chat overlay with the
+             composer prefilled; llama://model/<id> loads a server-known model
+             and opens the chat on it. Protocol activations can come from any
+             app or website, so payloads are parsed strictly and model ids are
+             matched against the server's model list before anything loads. -->
+        <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="llama">
+            <uap:DisplayName>Chat with Llama</uap:DisplayName>
+          </uap:Protocol>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
