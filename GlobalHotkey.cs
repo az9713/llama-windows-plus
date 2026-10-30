@@ -18,12 +18,32 @@ internal sealed class GlobalHotkey : IDisposable
     private const uint WM_HOTKEY = 0x0312;
     private const int HotkeyId = 0x0001;
 
-    // MOD_ALT + MOD_NOREPEAT, VK_SPACE → Alt+Space (the spotlight convention,
-    // matching PowerToys Run's default). The global registration intercepts it
-    // system-wide, so the Win11 system-menu shortcut is shadowed only while
-    // the app is running.
-    private const uint Modifier = 0x0001 /*MOD_ALT*/ | 0x4000 /*MOD_NOREPEAT*/;
-    private const uint Vk = 0x20; // VK_SPACE
+    // The shortcuts a user can pick (Settings → Chat overlay). Alt+Space is the
+    // spotlight convention (PowerToys Run's default) and the default here; the
+    // global registration shadows the Win11 system-menu shortcut only while the
+    // app runs. The L choices are for PCs where other launchers (Gemini, Claude)
+    // own the Space ones; Ctrl+Shift+L is left out because Excel and VS Code use it.
+    // All register with MOD_NOREPEAT (0x4000).
+    public static readonly (string Name, uint Modifiers, uint Vk)[] Choices =
+    [
+        ("Alt+Space", 0x0001 /*MOD_ALT*/, 0x20 /*VK_SPACE*/),
+        ("Ctrl+Alt+Space", 0x0002 /*MOD_CONTROL*/ | 0x0001, 0x20),
+        ("Ctrl+Shift+Space", 0x0002 | 0x0004 /*MOD_SHIFT*/, 0x20),
+        ("Ctrl+Alt+L", 0x0002 | 0x0001, 0x4C /*VK_L*/),
+        ("Ctrl+Shift+Alt+L", 0x0002 | 0x0004 | 0x0001, 0x4C),
+    ];
+
+    /// <summary>
+    /// True when no app owns <paramref name="name"/> now: registers it for a
+    /// moment and releases it at once (for the "used by another app" marks).
+    /// </summary>
+    public static bool IsFree(string name)
+    {
+        var (_, mods, vk) = Choices.First(c => c.Name == name);
+        if (!RegisterHotKey(IntPtr.Zero, 0x0002, mods | 0x4000, vk)) return false;
+        UnregisterHotKey(IntPtr.Zero, 0x0002);
+        return true;
+    }
 
     private static readonly IntPtr HWND_MESSAGE = new(-3);
 
@@ -43,8 +63,15 @@ internal sealed class GlobalHotkey : IDisposable
     /// </summary>
     public bool IsRegistered => _registered;
 
-    /// <summary>Registers the hotkey and delivers presses to <paramref name="onPressed"/>.</summary>
-    public void Register(Action onPressed)
+    /// <summary>The shortcut that is live (see <see cref="Choices"/>), or null.</summary>
+    public string? Name { get; private set; }
+
+    /// <summary>
+    /// Registers <paramref name="preferred"/> (a <see cref="Choices"/> name; null or
+    /// unknown = the first choice). If another app owns it, the other choices are
+    /// tried in order, so the overlay keeps a shortcut; <see cref="Name"/> says which.
+    /// </summary>
+    public void Register(Action onPressed, string? preferred)
     {
         if (_registered) return;
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -61,11 +88,18 @@ internal sealed class GlobalHotkey : IDisposable
         _currentHandle = GCHandle.Alloc(_current);
 
         _hwnd = CreateMessageOnlyWindow();
-        _registered = RegisterHotKey(_hwnd, HotkeyId, Modifier, Vk);
-        if (!_registered)
-            Log.Warn("global hotkey registration failed (Alt+Space may already be taken by another app).");
-        else
-            Log.Info("global hotkey registered: Alt+Space");
+        foreach (var (name, mods, vk) in Choices.OrderBy(c => c.Name == preferred ? 0 : 1))
+        {
+            if (!RegisterHotKey(_hwnd, HotkeyId, mods | 0x4000 /*MOD_NOREPEAT*/, vk))
+            {
+                Log.Warn($"global hotkey registration failed for {name} (another app may own it).");
+                continue;
+            }
+            _registered = true;
+            Name = name;
+            Log.Info($"global hotkey registered: {name}");
+            break;
+        }
     }
 
     public void Dispose()

@@ -2576,6 +2576,11 @@ namespace LlamaApp.Views
                         if (!item.IsLoaded)
                         {
                             Log.Info("model loaded: " + sm.Id);
+                            if (Settings.Current.LastLoadedModelId != sm.Id)
+                            {
+                                Settings.Current.LastLoadedModelId = sm.Id;
+                                Settings.Current.Save();
+                            }
                             // The Chat button jumps straight to the overlay —
                             // the reason the model was loaded in the first
                             // place — instead of just opening the flyout.

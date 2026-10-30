@@ -110,8 +110,15 @@ namespace LlamaApp
                     // (0xC0000409 from the native share host).
                     var isShareActivation =
                         activatedArgs.Data is Windows.ApplicationModel.Activation.ShareTargetActivatedEventArgs;
+                    // Wait for the redirect to finish before Environment.Exit: without
+                    // .AsTask() the await covered only the creation of the IAsyncAction,
+                    // and exiting mid-call crashed the running instance (CoreMessagingXP,
+                    // 0xc000027b) after 12 of 23 warm llama:// handoffs. The 5 s cap keeps
+                    // a stuck redirect from leaving this process alive.
                     if (!isShareActivation)
-                        await Task.Run(() => instance.RedirectActivationToAsync(activatedArgs));
+                        await Task.WhenAny(
+                            Task.Run(() => instance.RedirectActivationToAsync(activatedArgs).AsTask()),
+                            Task.Delay(5000));
                 }
                 catch (Exception ex)
                 {
@@ -273,7 +280,6 @@ namespace LlamaApp
             // hotkey is registered for the app's lifetime only, so it stops
             // working the moment Llama exits.
             _overlay = new OverlayWindow();
-            _hotkey = new GlobalHotkey();
             // Initialize the overlay's WebView2 NOW — at a calm point in
             // startup, awaited and fully observed — rather than at the first
             // summon. The app runs x64-emulated on ARM64, and the first WebView2
@@ -284,16 +290,7 @@ namespace LlamaApp
             // nothing). Prewarmed, the first summon just navigates — and is
             // instant, too.
             _overlay.PrewarmWebView();
-            _hotkey.Register(() => _dispatcher.TryEnqueue(() => _overlay.Summon()));
-
-            // The hotkey is hard-coded and otherwise undiscoverable — say so
-            // when it can't work instead of the shortcut silently doing
-            // nothing (RegisterHotKey fails when another app owns Alt+Space).
-            if (!_hotkey.IsRegistered)
-            {
-                Notifications.Show("Alt+Space unavailable",
-                    "Another app is using the Alt+Space shortcut, so the chat overlay hotkey is off.");
-            }
+            RegisterOverlayHotkey();
 
             // One-time first-run hint: the app is tray-only (no window appears
             // on launch) and the overlay hotkey is undiscoverable — tell the
@@ -303,7 +300,7 @@ namespace LlamaApp
                 Settings.Current.TrayHintShown = true;
                 Settings.Current.Save();
                 Notifications.Show("Llama is running",
-                    "Find it in the system tray — and press Alt+Space anytime to chat with a loaded model.");
+                    $"Find it in the system tray — and press {_hotkey?.Name ?? "the overlay shortcut"} anytime to chat with a loaded model.");
             }
 
             Common.Log.Info("startup complete");
@@ -575,6 +572,62 @@ namespace LlamaApp
             }
         }
 
+        /// <summary>The live overlay shortcut (for the Settings card), or null when none is free.</summary>
+        internal string? OverlayHotkeyName => _hotkey?.Name;
+
+        /// <summary>
+        /// (Re-)registers the overlay shortcut from <see cref="Settings.OverlayHotkey"/>.
+        /// Called at startup and when the user picks another shortcut in Settings.
+        /// Says so when the picked one is taken, instead of the shortcut silently
+        /// doing nothing (RegisterHotKey fails when another app owns it).
+        /// </summary>
+        internal void RegisterOverlayHotkey()
+        {
+            if (_overlay is null) return;
+            _hotkey?.Dispose();
+            _hotkey = new GlobalHotkey();
+            var wanted = Settings.Current.OverlayHotkey ?? GlobalHotkey.Choices[0].Name;
+            _hotkey.Register(() => _dispatcher.TryEnqueue(() => _overlay.Summon()), wanted);
+
+            if (_hotkey.Name is null)
+                Notifications.Show($"{wanted} unavailable",
+                    "Other apps use all the overlay shortcuts, so the hotkey is off. Open the overlay from the tray icon.");
+            else if (_hotkey.Name != wanted)
+                Notifications.Show($"{wanted} is taken — using {_hotkey.Name}",
+                    $"Another app uses {wanted}. Press {_hotkey.Name} to open the chat overlay. Change it in Settings.");
+        }
+
+        /// <summary>
+        /// A prompt arrived while no model is loaded: load the last-used model
+        /// (or the only model the server lists), so the text lands in a chat
+        /// instead of waiting on the model picker until the overlay gives up.
+        /// With no candidate, a toast tells the user what to do.
+        /// </summary>
+        private static async Task LoadModelForPromptAsync()
+        {
+            var mgr = Llama.LlamaManager.Shared;
+            if (mgr.LoadedModelId is not null) return;
+
+            // The startup model list may not be in yet — poll briefly.
+            for (var attempt = 0; attempt < 10 && mgr.LastModelsSnapshot.Count == 0; attempt++)
+                await Task.Delay(500);
+            var models = mgr.LastModelsSnapshot;
+            var id = models.Any(m => m.Id == Settings.Current.LastLoadedModelId)
+                ? Settings.Current.LastLoadedModelId
+                : models.Count == 1 ? models[0].Id : null;
+            if (id is null)
+            {
+                Notifications.Show("Pick a model",
+                    "No model is loaded. Pick one in the chat window — your text appears when it is ready.");
+                return;
+            }
+
+            Common.Log.Info($"prompt with no model loaded: loading '{id}'");
+            Notifications.Show("Loading the model", $"Loading {id}. Your text appears in the chat when it is ready.");
+            if (!await mgr.LoadModelAsync(new Views.ModelItem { Name = id, RepoName = id }))
+                Common.Log.Warn($"prompt with no model loaded: the server declined to load '{id}'");
+        }
+
         /// <summary>
         /// Shared text lands in the chat overlay: the overlay opens (Summon)
         /// and the text is handed to it as a pending prompt, which the overlay
@@ -589,6 +642,7 @@ namespace LlamaApp
                 Common.Log.Info($"shared text received ({prompt.Length} chars); opening the chat overlay");
                 _overlay?.Summon(ShareSummonGraceMs);
                 _overlay?.SetPendingPrompt(prompt);
+                await LoadModelForPromptAsync();
             }
             catch (Exception ex)
             {

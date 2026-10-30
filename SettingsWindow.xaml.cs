@@ -138,6 +138,16 @@ namespace LlamaApp
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
             LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
+            // Show the shortcut in effect (not a saved one another app took), and
+            // mark the ones other apps own now so the user doesn't pick a dead one.
+            var live = ((App)Microsoft.UI.Xaml.Application.Current).OverlayHotkeyName;
+            SelectComboBoxTag(HotkeyBox, live ?? s.OverlayHotkey, GlobalHotkey.Choices[0].Name);
+            HotkeyText.Text = live ?? "(no free shortcut)";
+            foreach (ComboBoxItem item in HotkeyBox.Items)
+            {
+                var name = (string)item.Tag;
+                item.Content = name == live || GlobalHotkey.IsFree(name) ? name : $"{name} (used by another app)";
+            }
             LoadInstallInfo();
         }
 
@@ -630,7 +640,12 @@ namespace LlamaApp
             try { _ = Llama.LlamaManager.Shared.ReloadModelPresetsAsync(); }
             catch (Exception ex) { Common.Log.Warn(ex, "model-folder preset reload failed"); }
 
+            var hotkey = (HotkeyBox.SelectedItem as ComboBoxItem)?.Tag as string;
+            var hotkeyChanged = hotkey != (s.OverlayHotkey ?? GlobalHotkey.Choices[0].Name);
+            if (hotkeyChanged) s.OverlayHotkey = hotkey;
+
             s.Save();
+            if (hotkeyChanged) ((App)Microsoft.UI.Xaml.Application.Current).RegisterOverlayHotkey();
             Close();
         }
 

@@ -133,6 +133,19 @@ public sealed class Settings
     public int MaxLoadedModels { get; set; } = 0;
 
     /// <summary>
+    /// The server model id that was loaded last. A share or llama:// prompt that
+    /// arrives with no model loaded loads this one, instead of waiting for the
+    /// user to pick a model.
+    /// </summary>
+    public string? LastLoadedModelId { get; set; }
+
+    /// <summary>
+    /// The chat overlay shortcut the user picked: a <see cref="GlobalHotkey.Choices"/>
+    /// name. Null = Alt+Space. If another app owns it, the next free choice is used.
+    /// </summary>
+    public string? OverlayHotkey { get; set; }
+
+    /// <summary>
     /// KV cache quantization type for the key tensor, handed to the server as
     /// <c>--cache-type-k</c> at launch. One of <c>f32</c>, <c>f16</c>,
     /// <c>bf16</c>, <c>q8_0</c>, <c>q4_0</c>, <c>q4_1</c>, <c>iq4_nl</c>,

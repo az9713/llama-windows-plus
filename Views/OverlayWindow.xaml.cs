@@ -42,10 +42,6 @@ public sealed partial class OverlayWindow : Window
     private const int OverlayMinWidthDips = 520;
     private const int OverlayMinHeightDips = 360;
 
-    private const int GWL_EXSTYLE = -20;
-    private const int WS_EX_TOOLWINDOW = 0x00000080;
-    private const int GWL_STYLE = -16;
-    private const long WS_POPUP = 0x80000000L;
 
     // UI thread queue — the shared-prompt retry needs to come back here
     // (WebView2 calls must stay on the UI thread).
@@ -54,6 +50,7 @@ public sealed partial class OverlayWindow : Window
         ?? throw new InvalidOperationException("OverlayWindow must be created on the UI thread.");
 
     private bool _configured;
+    private bool _placed; // centered once; afterwards the user's position and size are kept
     private IntPtr _hwnd;
 
     // URL the WebView2 is currently showing, so a re-summon re-navigates only
@@ -250,6 +247,19 @@ public sealed partial class OverlayWindow : Window
                 " — the chat never became ready for it");
             _pendingShare = null;
             if (pending.ImagePath is { } abandoned) DeleteOwnScratchImage(abandoned);
+            // Do not lose the user's text in silence: put it on the clipboard and say so.
+            if (pending.Prompt is { } lost)
+            {
+                try
+                {
+                    var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+                    package.SetText(lost);
+                    Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+                    Notifications.Show("Text copied, not sent",
+                        "The chat was not ready in 2 minutes. Your text is on the clipboard: load a model, then paste it with Ctrl+V.");
+                }
+                catch (Exception ex) { Common.Log.Warn(ex, "could not copy the abandoned prompt"); }
+            }
             return;
         }
         var generation = _shareGeneration;
@@ -282,33 +292,31 @@ public sealed partial class OverlayWindow : Window
         catch { /* best-effort scratch cleanup */ }
     }
 
-    /// <summary>Style as a borderless, taskbar-less spotlight popup centered on screen.</summary>
+    /// <summary>
+    /// Style as a normal window whose content (Mica) runs up into the title bar:
+    /// the empty header strip drags it, the edges resize it, and the system
+    /// minimize/close buttons sit at the top right. It has a taskbar and Alt+Tab
+    /// entry, so a minimized overlay can be found again. Close hides it (the
+    /// window object is reused by every summon).
+    /// </summary>
     private void ConfigureAsOverlay()
     {
         if (_configured) return;
         _configured = true;
 
+        Title = "Llama";
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(DragArea);
+
         var presenter = (OverlappedPresenter)AppWindow.Presenter;
-        presenter.SetBorderAndTitleBar(false, false);
-        presenter.IsResizable = false;
+        presenter.SetBorderAndTitleBar(true, true);
+        presenter.IsResizable = true;
         presenter.IsMaximizable = false;
-        presenter.IsMinimizable = false;
-        AppWindow.IsShownInSwitchers = false; // keep out of Alt-Tab / taskbar
+        presenter.IsMinimizable = true;
+        AppWindow.IsShownInSwitchers = true;
+        AppWindow.Closing += (_, e) => { e.Cancel = true; Hide(); };
 
         _hwnd = WindowNative.GetWindowHandle(this);
-
-        // WS_EX_TOOLWINDOW: no taskbar entry. WS_POPUP: drop the 1px frame so
-        // the Mica surface is flush to the rounded corners (same trick the
-        // tray flyout uses).
-        SetWindowLongCompat(_hwnd, GWL_EXSTYLE,
-            (IntPtr)(GetWindowLongCompat(_hwnd, GWL_EXSTYLE).ToInt32() | WS_EX_TOOLWINDOW));
-        SetWindowLongCompat(_hwnd, GWL_STYLE, new IntPtr(WS_POPUP));
-
-        const uint SWP_NOMOVE = 0x0002, SWP_NOSIZE = 0x0001,
-                   SWP_NOZORDER = 0x0004, SWP_NOOWNERZORDER = 0x0200,
-                   SWP_FRAMECHANGED = 0x0020;
-        SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
 
         // Pin the corner radius to the standard 8px "round" style rather than
         // relying on the system default.
@@ -331,7 +339,10 @@ public sealed partial class OverlayWindow : Window
         // set only InputBox.IsEnabled before Show; we restore that order and do
         // all content updates after the window is on screen.
         Common.Log.Info("overlay summon: begin");
-        CenterOnScreen();
+        // Center only on the first summon: later summons keep the place and size
+        // the user dragged it to. A minimized overlay is restored.
+        if (!_placed) { CenterOnScreen(); _placed = true; }
+        if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } p) p.Restore();
         _lastShownMs = Environment.TickCount64;
         _hideGraceMs = hideGraceMs;
 
@@ -662,13 +673,24 @@ public sealed partial class OverlayWindow : Window
         args.Handled = true;
     }
 
+    // ponytail: pin state lives for the app session only; persist it in Settings if users ask.
+    private void PinButton_Click(object sender, RoutedEventArgs e)
+    {
+        var pinned = PinButton.IsChecked == true;
+        PinIcon.Glyph = pinned ? "" : ""; // Pinned / Pin
+        PinLabel.Text = pinned ? "Kept open" : "Keep open";
+        FooterHint.Text = pinned ? " to dismiss · kept open when you click away" : " to dismiss";
+    }
+
     private void OverlayWindow_Activated(object sender, WindowActivatedEventArgs args)
     {
         // Dismiss on deactivation (clicking away), the same UX as the tray
         // flyout — except within the summon's grace window (see Summon):
         // focus churn around a programmatic summon (the share sheet dismissing)
-        // must not flash the overlay shut.
+        // must not flash the overlay shut — and except when the user pinned it.
         if (args.WindowActivationState == WindowActivationState.Deactivated &&
+            PinButton.IsChecked != true &&
+            AppWindow.Presenter is not OverlappedPresenter { State: OverlappedPresenterState.Minimized } &&
             Environment.TickCount64 - _lastShownMs > _hideGraceMs)
         {
             Common.Log.Debug("overlay hidden by deactivation (focus lost)");
@@ -715,27 +737,6 @@ public sealed partial class OverlayWindow : Window
     private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
 
     private const int MDT_EFFECTIVE_DPI = 0;
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
-    private static extern int GetWindowLong32(IntPtr hwnd, int nIndex);
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
-    private static extern IntPtr GetWindowLongPtr64(IntPtr hwnd, int nIndex);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLong")]
-    private static extern int SetWindowLong32(IntPtr hwnd, int nIndex, int value);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
-    private static extern IntPtr SetWindowLongPtr64(IntPtr hwnd, int nIndex, IntPtr value);
-
-    private static IntPtr GetWindowLongCompat(IntPtr hwnd, int nIndex) =>
-        IntPtr.Size == 4 ? (IntPtr)GetWindowLong32(hwnd, nIndex) : GetWindowLongPtr64(hwnd, nIndex);
-
-    private static void SetWindowLongCompat(IntPtr hwnd, int nIndex, IntPtr value)
-    {
-        if (IntPtr.Size == 4) SetWindowLong32(hwnd, nIndex, value.ToInt32());
-        else SetWindowLongPtr64(hwnd, nIndex, value);
-    }
 
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);

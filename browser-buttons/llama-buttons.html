@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Llama Browser Buttons</title>
+<style>
+:root { --bg: #0f172a; --card: #1e293b; --fg: #e2e8f0; --fg2: #cbd5e1; --muted: #94a3b8;
+  --line: #334155; --orange: #fb923c; --teal: #2dd4bf; color-scheme: dark; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 "Segoe UI", system-ui, sans-serif; }
+main { max-width: 820px; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 28px; }
+h1 { font-size: 34px; line-height: 1.15; margin: 0; }
+h2 { font-size: 20px; margin: 0 0 10px; display: flex; gap: 10px; align-items: center; }
+h2 .n { font: 600 13px Consolas, monospace; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--orange); color: var(--orange); display: grid; place-items: center; }
+p, li { color: var(--fg2); margin: 0; }
+ul, ol { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: grid; gap: 10px; }
+kbd, code { font-family: Consolas, monospace; font-size: 13px; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
+.buttons { display: flex; flex-wrap: wrap; gap: 10px; padding: 6px 0; }
+a.bm { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; color: var(--fg); background: var(--bg); border: 1px solid var(--orange); border-radius: 999px; padding: 7px 16px; font-weight: 600; cursor: grab; }
+a.bm::before { content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--orange); }
+a.test, button.test { font: 600 14px "Segoe UI", system-ui, sans-serif; color: var(--bg); background: var(--teal); border: 0; border-radius: 8px; padding: 7px 14px; text-decoration: none; cursor: pointer; display: inline-block; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--orange); outline-offset: 3px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+td, th { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); color: var(--fg2); }
+th { color: var(--muted); font-weight: 500; font-size: 13px; border-top: 0; }
+td:first-child { white-space: nowrap; }
+.muted { color: var(--muted); font-size: 13.5px; }
+.warn b:first-child { color: var(--orange); }
+.scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+  <header style="display:grid;gap:10px">
+    <h1>Llama Browser Buttons</h1>
+    <p>Four buttons for the Chrome bookmarks bar. Each button sends the text that you selected, or the whole page, to Gemma in Llama on this laptop. The answer appears in its own Chrome window. The text does not go to a cloud service. There is no extension to install.</p>
+  </header>
+
+  <section>
+    <h2><span class="n">1</span>Show the bookmarks bar</h2>
+    <p>Press <kbd>Ctrl+Shift+B</kbd> in Chrome. Do this step only if you do not see the bar.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">2</span>Drag each button to the bookmarks bar</h2>
+    <p>Hold the mouse button down on a button below, move it to the bookmarks bar, then release it. Do this for all four buttons.</p>
+    <div class="buttons" id="buttons"></div>
+    <p class="muted">Each bookmark contains a small script, not a web address. If Chrome asks for a name, keep the name that it shows.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">3</span>Test the chat window</h2>
+    <p class="warn"><b>Caution:</b> Llama must run (its icon is in the system tray), because the Llama server shows the chat page. Close your old Llama chat windows before the test.</p>
+    <p><button class="test" id="t1" type="button">Test</button></p>
+    <p><b>Expected:</b> a separate Chrome window opens at the right side of the screen with the Llama chat page. It sends "Reply with the word OK only." by itself, and Gemma answers. You can move, resize and minimize the window.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">4</span>Use the buttons</h2>
+    <ol>
+      <li>Select text on any web page. To send the whole page, select nothing.</li>
+      <li>Click a button on the bookmarks bar.</li>
+      <li>A Llama chat window opens and sends the instruction and the text by itself. You do not press Enter. If no model is loaded, the window loads Gemma first (about 10 seconds).</li>
+      <li>Read the answer. You can type a follow-up question in the window. Close the window when you are done.</li>
+    </ol>
+    <div class="scroll"><table>
+      <tr><th>Button</th><th>Instruction that it adds</th></tr>
+      <tbody id="instr"></tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2><span class="n">5</span>How much text a button sends</h2>
+    <ul>
+      <li>Text longer than 7,000 characters is cut to 7,000. The prompt then ends with "[The text was cut. Only the start is included.]".</li>
+      <li>Why 7,000: the model reads at most 4096 tokens, the question and the answer together. In a test, 12,000 characters of a Wikipedia page became 4,421 tokens, and the server refused the request. 7,000 characters became about 1,600 tokens.</li>
+      <li>The window address can have at most 30,000 characters (the server accepted a 30,000-character address in a test). English text always fits. Text in Chinese, Japanese, Russian or Greek uses up to 9 address characters for each letter, so the button cuts it to about 3,300 letters.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="n">6</span>Limits</h2>
+    <ul>
+      <li>The buttons do not work on <code>chrome://</code> pages, in the Chrome PDF viewer, or on a few sites that block scripts from bookmarks.</li>
+      <li>Text inside a frame from a different website cannot be read. The button then uses the whole page.</li>
+      <li>With no selection, a button sends the main part of the page (the <code>&lt;main&gt;</code> element, or the only <code>&lt;article&gt;</code>), without the side menus and the footer. If the page has no main part of at least 500 characters, it sends all the visible text.</li>
+      <li>The Reply button writes a draft only. You copy it, paste it, check it and send it yourself.</li>
+      <li>The chats are kept in the chat page's list of recent conversations, in this Chrome profile only.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="n">7</span>Known problems</h2>
+    <ul>
+      <li><b>Close the chat windows after you read the answer.</b> Each open chat window keeps one connection to the Llama server, and Chrome allows 6 connections to one server. In a test with 5 chat windows open, the next window sent nothing and showed no answer.</li>
+      <li><b>Summarize page can show a turning circle and no answer.</b> In tests, the first long prompt in a browser session was answered on the page. Later long prompts were answered by the server, but the chat page did not show the answer. The same occurred with a 3,000-character limit. The cause is in the llama.cpp chat page, and I did not find a workaround. Short selections (Explain, Translate, Reply) were not affected in the same tests.</li>
+      <li>The buttons no longer use the Llama overlay or <code>llama://</code> links, so the Llama crash that closed the overlay (12 of 23 handoffs in a test) does not affect them.</li>
+    </ul>
+    <p class="muted">Files: <code>buttons.js</code> (the button code), <code>llama-buttons.html</code> (this page), <code>check.js</code> (run <code>node check.js</code>; it prints CHECK_OK). After a change to <code>buttons.js</code>, open this page again and drag the buttons to the bar again.</p>
+  </section>
+</main>
+
+<script src="buttons.js"></script>
+<script>
+const BUTTONS = [
+  ['Explain', 'Explain this in plain language:'],
+  ['Summarize page', 'Summarize this in 5 short points:'],
+  ['Translate', 'Translate this into English:'],
+  ['Reply', 'Draft a short, polite reply to this message:'],
+];
+const box = document.getElementById('buttons'), instr = document.getElementById('instr');
+for (const [name, instruction] of BUTTONS) {
+  const code = '(' + llamaButton.toString() + ')(' + JSON.stringify({ instruction }) + ').go()';
+  const a = document.createElement('a');
+  a.className = 'bm'; a.textContent = name;
+  a.href = 'javascript:' + encodeURIComponent('void(' + code + ')');
+  box.append(a);
+  const tr = document.createElement('tr');
+  tr.innerHTML = '<td></td><td></td>';
+  tr.children[0].textContent = name; tr.children[1].textContent = instruction;
+  instr.append(tr);
+}
+document.getElementById('t1').addEventListener('click', () => {
+  const s = screen, width = 560, height = Math.min(820, s.availHeight - 60);
+  window.open('http://127.0.0.1:9931/?model=' + encodeURIComponent('ggml-org/gemma-3-4b-it-qat-GGUF:Q4_0') + '&load=true&q=' + encodeURIComponent('Reply with the word OK only.'),
+    'llama-test', 'popup,width=' + width + ',height=' + height + ',left=' + (s.availLeft + s.availWidth - width - 24) + ',top=' + (s.availTop + 24));
+});
+</script>
+</body>
+</html>

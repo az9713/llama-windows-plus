@@ -49,7 +49,13 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="120" /> <!-- room for the system minimize/close buttons -->
             </Grid.ColumnDefinitions>
+
+            <!-- Drag strip: the empty part of the header moves the window (SetTitleBar in
+                 ConfigureAsOverlay). Transparent, not null, so it receives hit tests. -->
+            <Border x:Name="DragArea" Grid.Column="0" Grid.ColumnSpan="2" Background="Transparent" />
 
             <!-- Brand: logo -->
             <Image Grid.Column="0"
@@ -59,10 +65,23 @@
                    HorizontalAlignment="Left"
                    VerticalAlignment="Center" />
 
-            <!-- Spacer -->
+            <!-- Pin: when on, clicking another window does not dismiss the overlay
+                 (Esc still does). Read in OverlayWindow_Activated. -->
+            <ToggleButton x:Name="PinButton"
+                          Grid.Column="2"
+                          VerticalAlignment="Center"
+                          Padding="8,4"
+                          Click="PinButton_Click"
+                          AutomationProperties.Name="Keep open"
+                          ToolTipService.ToolTip="Keep open when I click another window">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon x:Name="PinIcon" Glyph="&#xE718;" FontSize="12" />
+                    <TextBlock x:Name="PinLabel" Text="Keep open" FontSize="12" />
+                </StackPanel>
+            </ToggleButton>
 
             <!-- Model chip: status dot + model name (or "No model"). -->
-            <Border Grid.Column="2"
+            <Border Grid.Column="3"
                     CornerRadius="12"
                     Padding="10,4"
                     Background="{ThemeResource ControlFillColorSecondaryBrush}"
@@ -102,7 +121,7 @@
                    FontSize="11"
                    Foreground="{ThemeResource TextFillColorTertiaryBrush}">
             <Run Text="Esc" FontWeight="SemiBold" />
-            <Run Text=" to dismiss" />
+            <Run x:Name="FooterHint" Text=" to dismiss" />
         </TextBlock>
     </Grid>
     </UserControl>
