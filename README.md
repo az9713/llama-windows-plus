@@ -64,6 +64,8 @@ You need the .NET 10 SDK and Windows 11 x64.
 | Model auto-load | Builds; existing unit tests pass (585/585 and 717/717). Not yet tried by hand. |
 | Keep open, movable overlay, crash fix | Builds. Not yet tried by hand. |
 
+CI: the upstream workflow builds and tests both x64 and arm64 on each push to `main`. One upstream test, `EnrolledFolderWatcherTests.A_Burst_Of_Model_Changes_Fires_One_Callback`, depends on timing. On 2026-10-30 it failed on both runners in the first attempt (716/717 passed) and passed when we ran it again. If it fails, run the failed jobs again.
+
 Known problems that we did not fix:
 
 - **One chat window for the buttons:** each click opens a new window. The Llama server sends `Cross-Origin-Opener-Policy: same-origin` on its chat page, so a button cannot find and reuse the old window.
